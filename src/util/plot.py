@@ -57,7 +57,7 @@ def plot_recent_candlesticks(df, last_n_periods=60, filename=None):
         ax.yaxis.set_ticks_position("right")  # Ensure ticks are on the right side
 
     if filename:
-        fig.savefig(filename, dpi=78, bbox_inches="tight")
+        fig.savefig(filename, dpi=130, bbox_inches="tight")
         plt.close(fig)
 
     return fig
