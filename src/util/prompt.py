@@ -4,13 +4,15 @@ ANALYZE_PROMPT = """Analyze the provided SPY intraday candlestick chart (1-hour 
 def generate_summary_prompt(responses):
     prompt = f"""Analyze these multiple LLM responses on SPY candlestick chart patterns, FVGs, volume trends, and price predictions. Provide a concise, intelligent synthesis that extracts:
 
-1. **Dominant technical signals** - The most frequently identified patterns and FVGs across responses, with their directional bias
+1. **Dominant technical signals** - The most frequently identified patterns and FVGs across responses, with their directional bias and probability
 2. **Critical price levels** - Support/resistance zones showing strongest consensus
 3. **Volume-price alignment** - Key volume trends reinforcing or contradicting price signals
 4. **Consensus forecast** - Predominant price direction, timeframe, and confidence drivers
 5. **Highest-conviction setup** - The single most consistent analysis across responses
 
 Focus on convergence across responses. Deliver sharp, digestible insights prioritizing signal strength over exhaustive detail. Structure as 5 bullet points, each 2-3 sentences maximum.
+
+**High-Conviction Alert**: If the averaged probability estimate across all responses exceeds 70% for a clear directional consensus (upside OR downside), include the keyword "BLUEHORSESHOE" exactly once at the end of bullet point 4 (Consensus forecast). This signals a strong trading opportunity.
 
 **Responses to analyze (seperated by ---):**
 {"\n---\n".join(responses)}"""
