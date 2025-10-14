@@ -5,6 +5,8 @@ from src.util.plot import plot_recent_candlesticks
 from src.util.vibe import chat, build_msg
 from src.util.prompt import ANALYZE_PROMPT, generate_summary_prompt
 from concurrent.futures import ThreadPoolExecutor
+from rich.markdown import Markdown
+from rich.console import Console
 
 
 def pack_member(prompt: str, charts: list[str] = []) -> List[ContentBlock]:
@@ -57,6 +59,7 @@ if __name__ == "__main__":
 
     summary_prompt = generate_summary_prompt(analysis)
 
-    final_summary = pack_member(summary_prompt)
+    final_summary = pack_member(summary_prompt)[0].text
 
-    print(final_summary)
+    console = Console()
+    console.print(final_summary)
