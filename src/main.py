@@ -70,9 +70,11 @@ def pack_hunt(stop_event: Event):
 
             # process summary and analysis
             if "BLUEHORSESHOE" in final_summary:
+                current_time = datetime.now().strftime("%H:%M:%S")
+                console.print(f"[dim]⏰ {current_time}")
                 console.print(Markdown(final_summary))
 
-            stop_event.wait(timeout=60)
+            stop_event.wait(timeout=130)
         except Exception as e:
             console.log(f"[red]Error in hunt: {e}[/red]")
             break
