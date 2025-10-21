@@ -49,12 +49,9 @@ async def send_to_general(message, mention_role=None):
                 else:
                     console.print(f"[yellow]Role '{mention_role}' not found[/yellow]")
 
-            if len(message) > 2000:
-                # Truncate and add indicator
-                max_content = 2000 - len(role_mention) - 50
-                full_message = f"{role_mention}{message[:max_content]}... (truncated)"
-            else:
-                full_message = f"{role_mention}{message}"
+            # Truncate and add indicator
+            max_content = min(2000 - len(role_mention) - 50, len(message))
+            full_message = f"{role_mention}{message[:max_content]}... (truncated)"
 
             await channel.send(full_message)
             console.print(f"[green]✓ Message sent to #{channel.name}[/green]")
