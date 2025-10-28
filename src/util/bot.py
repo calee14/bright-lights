@@ -51,7 +51,7 @@ async def send_to_general(message, mention_role=None):
 
             # Truncate and add indicator
             max_content = min(2000 - len(role_mention) - 50, len(message))
-            full_message = f"{role_mention}{message[:max_content]}... (truncated)"
+            full_message = f"{role_mention}{message[:max_content]}"
 
             try:
                 await channel.send(full_message)
