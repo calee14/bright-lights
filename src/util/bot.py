@@ -53,8 +53,11 @@ async def send_to_general(message, mention_role=None):
             max_content = min(2000 - len(role_mention) - 50, len(message))
             full_message = f"{role_mention}{message[:max_content]}... (truncated)"
 
-            await channel.send(full_message)
-            console.print(f"[green]✓ Message sent to #{channel.name}[/green]")
+            try:
+                await channel.send(full_message)
+                console.print(f"[green]✓ Message sent to #{channel.name}[/green]")
+            except Exception as e:
+                console.print(f"[red] Error while trying to send message: {e}[/red]")
             return
 
 
