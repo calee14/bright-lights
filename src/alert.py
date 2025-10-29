@@ -18,14 +18,14 @@ async def messenger(alert_price, above):
         close_price = df["Close"].iloc[-1]
 
         if above:
-            if close_price <= alert_price:
+            if close_price >= alert_price:
                 await send_to_general(
                     f"ALERT: The price has broken above the {close_price} target!",
                     "robin",
                 )
                 break
         else:
-            if close_price >= alert_price:
+            if close_price <= alert_price:
                 await send_to_general(
                     f"ALERT: The price has broken below the {close_price} target!",
                     "robin",
