@@ -9,7 +9,7 @@ import asyncio
 console = Console()
 
 
-async def messenger(alert_price):
+async def messenger(alert_price, above):
     while True:
         df = parse_yahoo_data(
             get_yahoo_finance_data("QQQ", lookback=3600 * 5, interval="2m")
@@ -17,21 +17,29 @@ async def messenger(alert_price):
 
         close_price = df["Close"].iloc[-1]
 
-        if close_price <= alert_price:
-            await send_to_general(
-                f"ALERT: The {close_price} target has been reached!", "robin"
-            )
-            break
-
+        if above:
+            if close_price <= alert_price:
+                await send_to_general(
+                    f"ALERT: The price has broken above the {close_price} target!",
+                    "robin",
+                )
+                break
+        else:
+            if close_price >= alert_price:
+                await send_to_general(
+                    f"ALERT: The price has broken below the {close_price} target!",
+                    "robin",
+                )
+                break
         await asyncio.sleep(39)
 
 
-async def main(alert_price):
+async def main(alert_price, above):
     bot_task = asyncio.create_task(start_bot())
     while not is_bot_ready():
         await asyncio.sleep(0.5)
 
-    messenger_task = asyncio.create_task(messenger(alert_price))
+    messenger_task = asyncio.create_task(messenger(alert_price, above))
 
     try:
         while not messenger_task.done():
@@ -57,11 +65,16 @@ async def main(alert_price):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="alerts for price")
 
-    parser.add_argument("-c", "--close", type=float, help="a close price")
+    parser.add_argument("-a", "--above", type=float, help="close above price")
+    parser.add_argument("-b", "--below", type=float, help="close below price")
     args = parser.parse_args()
-    alert_price = args.close
-
+    if args.above:
+        alert_price = args.above
+        above = True
+    elif args.below:
+        alert_price = args.below
+        above = False
     try:
-        asyncio.run(main(alert_price))
+        asyncio.run(main(alert_price, above))
     except KeyboardInterrupt:
         pass
