@@ -24,7 +24,7 @@ async def messenger(alert_args):
                     "robin",
                 )
                 break
-        elif alert_args["below"]:
+        if alert_args["below"]:
             if close_price <= alert_args["below"]:
                 await send_to_general(
                     f"ALERT: The price has broken below the {close_price} target!",
