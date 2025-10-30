@@ -31,7 +31,7 @@ async def messenger(alert_args):
                     "robin",
                 )
                 break
-        await asyncio.sleep(39)
+        await asyncio.sleep(26)
 
 
 async def main(alert_args):
