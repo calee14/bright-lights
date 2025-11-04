@@ -17,6 +17,8 @@ from src.util.prompt import (
     STAGE3_PREDICTION,
     generate_final_alert_prompt,
 )
+
+from src.alert import messenger as alert_messenger
 from concurrent.futures import Future, ThreadPoolExecutor
 from rich.markdown import Markdown
 from rich.console import Console
@@ -24,6 +26,7 @@ from datetime import datetime
 from threading import Event
 import asyncio
 import json
+import re
 
 console = Console()
 
@@ -189,6 +192,30 @@ def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
     }
 
 
+def extract_price_bounds(summary_text: str) -> Dict[str, float]:
+    """
+    Extract upper and lower price bounds from the final summary.
+    Returns dict with 'above' and 'below' keys.
+    """
+    bounds = {"above": None, "below": None}
+
+    # Look for patterns like "Upper Bound: $500.25" or "Upper Bound**: 500.25"
+    upper_match = re.search(
+        r"Upper Bound[:\*\s]+\$?(\d+\.?\d*)", summary_text, re.IGNORECASE
+    )
+    if upper_match:
+        bounds["above"] = float(upper_match.group(1))
+
+    # Look for patterns like "Lower Bound: $495.50" or "Lower Bound**: 495.50"
+    lower_match = re.search(
+        r"Lower Bound[:\*\s]+\$?(\d+\.?\d*)", summary_text, re.IGNORECASE
+    )
+    if lower_match:
+        bounds["below"] = float(lower_match.group(1))
+
+    return bounds
+
+
 # Generate final summary with consensus
 def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
     """
@@ -224,8 +251,77 @@ def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
         return final_output
 
 
+async def start_price_alert(alert_args: Dict, alert_id: int):
+    """
+    Start a price alert monitor in a separate task.
+    Runs the alert module asynchronously.
+    """
+    try:
+        console.print(f"[green]🔔 Starting price alert monitor #{alert_id}...[/green]")
+        console.print(
+            f"[yellow]  → Upper bound (above): ${alert_args.get('above', 'N/A')}[/yellow]"
+        )
+        console.print(
+            f"[yellow]  → Lower bound (below): ${alert_args.get('below', 'N/A')}[/yellow]"
+        )
+
+        # Run the alert messenger
+        await alert_messenger(alert_args)
+
+        console.print(f"[green]✓ Alert #{alert_id} completed (target reached)[/green]")
+
+    except asyncio.CancelledError:
+        console.print(f"[dim]Alert #{alert_id} cancelled[/dim]")
+        raise
+    except ImportError as e:
+        console.print(f"[red]✗ Could not import alert module: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]✗ Error in price alert #{alert_id}: {e}[/red]")
+
+
+def cleanup_finished_tasks(
+    alert_tasks: List[asyncio.Task], max_tasks: int = 3
+) -> List[asyncio.Task]:
+    """
+    Remove completed or cancelled tasks from the list.
+    If more than max_tasks are running, cancel the oldest ones.
+    Returns a new list with only active tasks (up to max_tasks).
+    """
+    active_tasks = []
+
+    # First pass: separate finished from active tasks
+    for task in alert_tasks:
+        if task.done():
+            # Log any exceptions that occurred
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass  # Expected when we cancel
+            except Exception as e:
+                console.print(f"[red]Task failed with error: {e}[/red]")
+        else:
+            active_tasks.append(task)
+
+    # Second pass: if we have too many active tasks, cancel the oldest ones
+    if len(active_tasks) > max_tasks:
+        tasks_to_cancel = active_tasks[:-max_tasks]  # All except the last max_tasks
+        tasks_to_keep = active_tasks[-max_tasks:]  # Keep only the last max_tasks
+
+        console.print(
+            f"[yellow]⚠️  Too many active alerts ({len(active_tasks)}). "
+            f"Cancelling {len(tasks_to_cancel)} oldest alert(s)...[/yellow]"
+        )
+
+        for task in tasks_to_cancel:
+            task.cancel()
+
+        return tasks_to_keep
+
+    return active_tasks
+
+
 # Main hunting loop
-def pack_hunt(stop_event: Event):
+def pack_hunt(stop_event: Event, alert_task_holder: Dict):
     """Continuous loop running analysis pipeline"""
     while not stop_event.is_set():
         try:
@@ -260,6 +356,25 @@ def pack_hunt(stop_event: Event):
                 console.print(f"\n[bold green]🎯 HIGH CONFIDENCE SIGNAL[/bold green]")
                 console.print(Markdown(final_summary))
                 message_queue.put(final_summary)
+
+                # Extract price bounds and start alert monitoring
+                price_bounds = extract_price_bounds(final_summary)
+
+                if price_bounds["above"] or price_bounds["below"]:
+                    alert_args = {
+                        "above": price_bounds["above"],
+                        "below": price_bounds["below"],
+                    }
+                    # Store the alert task creation request
+                    alert_task_holder["pending_alert"] = alert_args
+                    console.print(
+                        f"[green]✓ Alert parameters extracted and queued[/green]"
+                    )
+                else:
+                    console.print(
+                        f"[yellow]⚠️  Could not extract price bounds from summary[/yellow]"
+                    )
+
             else:
                 console.print(f"[dim]ℹ️  No high-confidence signal this cycle[/dim]")
 
@@ -294,8 +409,14 @@ async def main():
     stop_event = Event()
     executor = ThreadPoolExecutor(max_workers=2)
 
+    # Holder for alert tasks and parameters
+    alert_task_holder: Dict = {
+        "pending_alert": None,
+        "alert_tasks": [],
+        "alert_counter": 0,  # Track alert IDs
+    }
     try:
-        hunt_future = executor.submit(pack_hunt, stop_event)
+        hunt_future = executor.submit(pack_hunt, stop_event, alert_task_holder)
         hunt_future.add_done_callback(on_hunt_complete)
 
         while not stop_event.is_set():
@@ -303,16 +424,56 @@ async def main():
                 console.print("[yellow]Hunt worker stopped[/yellow]")
                 break
 
-            await asyncio.sleep(5)  # Check every 5 seconds
+            # Clean up finished tasks
+            alert_task_holder["alert_tasks"] = cleanup_finished_tasks(
+                alert_task_holder["alert_tasks"]
+            )
+
+            # Report active alerts count if any
+            active_count = len(alert_task_holder["alert_tasks"])
+            if active_count > 0:
+                console.print(f"[dim]Active alerts: {active_count}[/dim]")
+
+            # Check if there's a pending alert to start
+            if alert_task_holder["pending_alert"] is not None:
+                alert_args = alert_task_holder["pending_alert"]
+                alert_task_holder["alert_counter"] += 1
+                alert_id = alert_task_holder["alert_counter"]
+
+                # Create and add new alert task
+                new_task = asyncio.create_task(start_price_alert(alert_args, alert_id))
+                alert_task_holder["alert_tasks"].append(new_task)
+                alert_task_holder["pending_alert"] = None
+
+                console.print(
+                    f"[green]✓ Alert #{alert_id} started (Total active: {len(alert_task_holder['alert_tasks'])})[/green]"
+                )
+                await asyncio.sleep(5)  # Check every 5 seconds
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]⚠️  Shutting down gracefully...[/yellow]")
+
     finally:
         console.print("[dim]Starting cleanup...[/dim]")
 
         stop_event.set()
         executor.shutdown(wait=True)
         console.print("[dim]✓ Executor shut down[/dim]")
+
+        # Cancel all alert tasks
+        if alert_task_holder["alert_tasks"]:
+            console.print(
+                f"[dim]Cancelling {len(alert_task_holder['alert_tasks'])} alert task(s)...[/dim]"
+            )
+            for task in alert_task_holder["alert_tasks"]:
+                if not task.done():
+                    task.cancel()
+
+            # Wait for all to complete cancellation
+            await asyncio.gather(
+                *alert_task_holder["alert_tasks"], return_exceptions=True
+            )
+            console.print("[dim]✓ All alert tasks cancelled[/dim]")
 
         messenger_task.cancel()
         try:

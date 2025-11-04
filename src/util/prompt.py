@@ -126,6 +126,12 @@ STAGE3_PREDICTION = """Based on your Stage 1 pattern detection and Stage 2 confl
 ## Confidence
 [X]% (Justify based on confluence score and agreement of factors)
 
+## Price Targets
+**Upper Bound**: [Specific price level - resistance or pattern target for upside]
+**Lower Bound**: [Specific price level - support or invalidation for downside]
+
+(Note: Provide actual numeric price levels based on visible chart levels. For UP direction, upper bound is the target; for DOWN direction, lower bound is the target. The other bound serves as invalidation/stop level.)
+
 ## Key Level
 **Invalidation**: If price closes below/above [describe specific level or pattern], this setup is invalid
 
@@ -143,6 +149,7 @@ Explain the 2-3 most important factors:
 - If contradicting 4+ scored patterns exist, state "Mixed signals, no clear bias"
 - Be honest about uncertainty - don't force a prediction
 - Focus on what's CLEARLY visible in the charts
+- ALWAYS provide specific numeric price levels for upper and lower bounds
 """
 
 
@@ -168,11 +175,16 @@ Create a concise final summary (max 250 words) that:
 2. **Highlights the strongest confluence factors** mentioned by multiple analysts
 3. **Notes any disagreements** and why certain analysts differed
 4. **Provides actionable insight** - what should a trader focus on?
+5. **Consolidates price targets** - average or use the most commonly cited upper/lower bounds
 
 **OUTPUT FORMAT:**
 
 ## Market Outlook: {consensus}
 **Confidence Level**: {avg_confidence:.0f}% | **Analyst Agreement**: {agreement_pct:.0f}%
+
+### Price Targets
+**Upper Bound**: [Consolidated upper price target]
+**Lower Bound**: [Consolidated lower price target]
 
 ### Key Factors
 [2-3 bullet points of the most important confluence factors]
@@ -188,4 +200,7 @@ Create a concise final summary (max 250 words) that:
 - Don't repeat everything - synthesize the MOST important points
 - If agreement is low (<67%), emphasize caution
 - Focus on factors mentioned by multiple analysts
+- MUST include specific numeric price levels for Upper Bound and Lower Bound
+- If analysts provided different price targets, average them or use the most conservative range
 """
+
