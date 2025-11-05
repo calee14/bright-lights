@@ -191,15 +191,21 @@ def extract_price_bounds(summary_text: str) -> Dict[str, float]:
     bounds = {"above": None, "below": None}
 
     # Look for patterns like "Upper Bound: $500.25" or "Upper Bound**: 500.25"
+    # Handles optional parenthetical text and captures first number in a range
     upper_match = re.search(
-        r"Upper Bound[:\*\s]+\$?(\d+\.?\d*)", summary_text, re.IGNORECASE
+        r"Upper Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
+        summary_text,
+        re.IGNORECASE,
     )
     if upper_match:
         bounds["above"] = float(upper_match.group(1))
 
-    # Look for patterns like "Lower Bound: $495.50" or "Lower Bound**: 495.50"
+    # Look for patterns like "Lower Bound: $495.50" or "Lower Bound (Primary Target): 625.80–625.85"
+    # Handles optional parenthetical text and captures first number in a range
     lower_match = re.search(
-        r"Lower Bound[:\*\s]+\$?(\d+\.?\d*)", summary_text, re.IGNORECASE
+        r"Lower Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
+        summary_text,
+        re.IGNORECASE,
     )
     if lower_match:
         bounds["below"] = float(lower_match.group(1))
