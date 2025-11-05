@@ -3,7 +3,7 @@ import os
 import base64
 
 client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
-MODEL = "claude-sonnet-4-5-20250929"
+MODEL = "claude-haiku-4-5-20251001"
 
 
 def encode_image(image_path: str) -> str:
