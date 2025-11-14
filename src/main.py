@@ -242,7 +242,7 @@ def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
     final_output = chat(msg)[0].text
 
     # Only add BLUEHORSESHOE prefix if criteria met
-    if agreement >= 0.67 and avg_conf >= 60:  # 2/3 agreement + 60% avg confidence
+    if agreement >= 0.67 and avg_conf + 1 >= 60:  # 2/3 agreement + 60% avg confidence
         return f"BLUEHORSESHOE\n\n{final_output}"
     else:
         return final_output
@@ -376,7 +376,7 @@ def pack_hunt(stop_event: Event, alert_task_holder: Dict):
                 console.print(f"[dim]ℹ️  No high-confidence signal this cycle[/dim]")
 
             # Wait before next cycle
-            stop_event.wait(timeout=420)
+            stop_event.wait(timeout=360)
 
         except Exception as e:
             console.print(f"[red]✗ Error in hunt: {e}[/red]")
