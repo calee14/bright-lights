@@ -103,48 +103,28 @@ For each Stage 1 pattern, assign a score (1-5):
 [Each Stage 1 pattern with score 1-5 and reasoning]
 """
 
-STAGE3_PREDICTION = """Based on your Stage 1 pattern detection and Stage 2 confluence analysis, make your prediction with emphasis on TREND and BREAKOUT analysis.
+STAGE3_PREDICTION = """Based on your Stage 1 pattern detection and Stage 2 confluence analysis, make your prediction.
 
 **SYNTHESIS PROCESS:**
 
-1. **Trend Analysis**: 
-   - Examine the last 15-20 candles for directional momentum
-   - Look at higher highs/lower lows sequence
-   - Check if price is above/below moving average (if visible)
-   - Assess consistency of price movement
+1. **Prioritize**: Which pattern(s) have the highest confluence scores (4-5)?
 
-2. **Breakout Analysis**:
-   - Identify if price is breaking through key S/R levels from Stage 2
-   - Check if breakout is accompanied by volume expansion
-   - Assess if price is breaking out of consolidation/range
-   - Evaluate follow-through candles after breakout
+2. **Conflicts**: Are there contradicting signals? If yes:
+   - Which timeframe takes priority?
+   - Which confluence factors are stronger?
 
-3. **Pattern Confluence**: Which pattern(s) have the highest confluence scores (4-5)?
-
-4. **Direction Bias**: Based on trend + breakout + patterns, what's the primary directional bias?
+3. **Direction Bias**: Based on the strongest signals, what's the primary directional bias?
 
 **PREDICTION FORMAT:**
 
-## Trend Assessment
-**Trend Exists**: Yes / No
-**Trend Direction**: Up / Down / Sideways
-**Trend Strength**: [X]% (0-100%)
-(Justify: Consider consistency of higher highs/lows, angle of movement, number of consecutive candles in same direction, price position relative to key levels)
-
-## Breakout Assessment
-**Breakout Exists**: Yes / No
-**Breakout Direction**: Up / Down / None
-**Breakout Strength**: [X]% (0-100%)
-(Justify: Consider distance from broken level, volume confirmation, speed of breakout, follow-through candles, gap size if present)
-
 ## Primary Setup
-[Describe the highest-confluence pattern and its supporting factors, with emphasis on how it aligns with trend/breakout]
+[Describe the highest-confluence pattern and its supporting factors]
 
 ## Direction
 **Up** / **Down** / **Neutral**
 
 ## Confidence
-[X]% (Justify based on trend strength + breakout strength + confluence score)
+[X]% (Justify based on confluence score and agreement of factors)
 
 ## Price Targets
 **Upper Bound**: [Specific price level - resistance or pattern target for upside]
@@ -160,17 +140,13 @@ Next 1 hour
 
 ## Rationale (Max 200 words)
 Explain the 2-3 most important factors:
-- What is the trend telling us?
-- Is there a confirmed breakout?
 - Which pattern has the best setup?
 - What confluence factors support it most strongly?
 - Are there any contradicting factors you're overriding? Why?
 
 **CRITICAL RULES:**
-- Trend Strength 0% = No trend (sideways/choppy), 50% = Moderate trend, 100% = Very strong unidirectional trend
-- Breakout Strength 0% = No breakout or false breakout, 50% = Moderate breakout, 100% = Explosive breakout with confirmation
-- If trend strength < 30% AND no pattern scores above 3, state "No high-conviction setup"
-- Focus on TREND and BREAKOUT as primary signals, patterns as confirmation
+- If no pattern scores above 3, state "No high-conviction setup"
+- If contradicting 4+ scored patterns exist, state "Mixed signals, no clear bias"
 - Be honest about uncertainty - don't force a prediction
 - Focus on what's CLEARLY visible in the charts
 - ALWAYS provide specific numeric price levels for upper and lower bounds
@@ -178,23 +154,16 @@ Explain the 2-3 most important factors:
 
 
 def generate_final_alert_prompt(
-    consensus: str,
-    agreement_pct: float,
-    avg_confidence: float,
-    analyst_summaries: str,
-    avg_trend_strength: float = 0,
-    avg_breakout_strength: float = 0,
+    consensus: str, agreement_pct: float, avg_confidence: float, analyst_summaries: str
 ) -> str:
     """Generate prompt for final summary aggregation"""
 
-    return f"""You are aggregating predictions from 2 independent technical analysts who each completed a thorough 3-stage analysis of QQQ charts.
+    return f"""You are aggregating predictions from 3 independent technical analysts who each completed a thorough 3-stage analysis of QQQ charts.
 
 **CONSENSUS DATA:**
 - Direction: {consensus}
 - Analyst Agreement: {agreement_pct:.0f}%
 - Average Confidence: {avg_confidence:.0f}%
-- Average Trend Strength: {avg_trend_strength:.0f}%
-- Average Breakout Strength: {avg_breakout_strength:.0f}%
 
 **INDIVIDUAL ANALYST PREDICTIONS:**
 {analyst_summaries}
@@ -202,25 +171,23 @@ def generate_final_alert_prompt(
 **YOUR TASK:**
 Create a concise final summary (max 250 words) that:
 
-1. **States the consensus** clearly upfront with trend/breakout context
-2. **Highlights trend and breakout signals** - are they aligned?
-3. **Notes the strongest confluence factors** mentioned by multiple analysts
-4. **Notes any disagreements** and why certain analysts differed
-5. **Provides actionable insight** - what should a trader focus on?
-6. **Consolidates price targets** - average or use the most commonly cited upper/lower bounds
+1. **States the consensus** clearly upfront
+2. **Highlights the strongest confluence factors** mentioned by multiple analysts
+3. **Notes any disagreements** and why certain analysts differed
+4. **Provides actionable insight** - what should a trader focus on?
+5. **Consolidates price targets** - average or use the most commonly cited upper/lower bounds
 
 **OUTPUT FORMAT:**
 
 ## Market Outlook: {consensus}
 **Confidence Level**: {avg_confidence:.0f}% | **Analyst Agreement**: {agreement_pct:.0f}%
-**Trend Strength**: {avg_trend_strength:.0f}% | **Breakout Strength**: {avg_breakout_strength:.0f}%
 
 ### Price Targets
 **Upper Bound**: [Consolidated upper price target]
 **Lower Bound**: [Consolidated lower price target]
 
 ### Key Factors
-[2-3 bullet points focusing on trend/breakout signals and most important confluence factors]
+[2-3 bullet points of the most important confluence factors]
 
 ### Trade Consideration
 [1-2 sentences on invalidation level and timeframe]
@@ -230,11 +197,9 @@ Create a concise final summary (max 250 words) that:
 
 **CRITICAL**: 
 - Be concise and actionable
-- Emphasize trend and breakout strength in your assessment
 - Don't repeat everything - synthesize the MOST important points
 - If agreement is low (<67%), emphasize caution
 - Focus on factors mentioned by multiple analysts
 - MUST include specific numeric price levels for Upper Bound and Lower Bound
 - If analysts provided different price targets, average them or use the most conservative range
 """
-

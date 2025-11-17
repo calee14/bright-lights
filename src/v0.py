@@ -29,8 +29,6 @@ import json
 import re
 
 console = Console()
-TREND_STRENGTH_LEVEL = 60
-BREAKOUT_STRENGTH_LEVEL = 60
 
 
 # Single analysis call
@@ -82,7 +80,7 @@ def pipeline_analyst(charts: list[str], analyst_id: int) -> Dict[str, str]:
 
 
 # Run multiple analysts in parallel (each doing full 3-stage pipeline)
-def run_pack_pipeline(charts: list[str], num_analysts: int = 2):
+def run_pack_pipeline(charts: list[str], num_analysts: int = 3):
     """
     Run multiple analysts through the 3-stage pipeline concurrently.
     Each analyst completes all 3 stages independently.
@@ -117,73 +115,21 @@ def ticker_scent(ticker: str):
     return charts
 
 
-def extract_trend_breakout_data(prediction_text: str) -> Dict:
-    """
-    Extract trend and breakout information from Stage 3 prediction.
-    Returns dict with trend_exists, trend_direction, trend_strength,
-    breakout_exists, breakout_direction, breakout_strength.
-    """
-    data = {
-        "trend_exists": False,
-        "trend_direction": "SIDEWAYS",
-        "trend_strength": 0,
-        "breakout_exists": False,
-        "breakout_direction": "NONE",
-        "breakout_strength": 0,
-    }
-
-    # Extract Trend Exists
-    if re.search(r"Trend Exists[:\*\s]+Yes", prediction_text, re.IGNORECASE):
-        data["trend_exists"] = True
-
-    # Extract Trend Direction
-    trend_dir_match = re.search(
-        r"Trend Direction[:\*\s]+(Up|Down|Sideways)", prediction_text, re.IGNORECASE
-    )
-    if trend_dir_match:
-        data["trend_direction"] = trend_dir_match.group(1).upper()
-
-    # Extract Trend Strength
-    trend_strength_match = re.search(
-        r"Trend Strength[:\*\s]+(\d{1,3})%", prediction_text, re.IGNORECASE
-    )
-    if trend_strength_match:
-        data["trend_strength"] = int(trend_strength_match.group(1))
-
-    # Extract Breakout Exists
-    if re.search(r"Breakout Exists[:\*\s]+Yes", prediction_text, re.IGNORECASE):
-        data["breakout_exists"] = True
-
-    # Extract Breakout Direction
-    breakout_dir_match = re.search(
-        r"Breakout Direction[:\*\s]+(Up|Down|None)", prediction_text, re.IGNORECASE
-    )
-    if breakout_dir_match:
-        data["breakout_direction"] = breakout_dir_match.group(1).upper()
-
-    # Extract Breakout Strength
-    breakout_strength_match = re.search(
-        r"Breakout Strength[:\*\s]+(\d{1,3})%", prediction_text, re.IGNORECASE
-    )
-    if breakout_strength_match:
-        data["breakout_strength"] = int(breakout_strength_match.group(1))
-
-    return data
-
-
 # Aggregate predictions from multiple analysts
 def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
     """
     Parse predictions from all analysts and create consensus view.
-    Returns aggregate statistics including trend/breakout data.
+    Returns aggregate statistics and most confident prediction.
     """
     predictions = []
 
     for result in analyst_results:
         prediction_text = result["stage3_prediction"]
 
-        # Extract direction
+        # Simple parsing - you can make this more sophisticated
         direction = None
+        confidence = 0
+
         if "Direction: Up" in prediction_text or "Direction:** Up" in prediction_text:
             direction = "UP"
         elif (
@@ -194,24 +140,17 @@ def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
         else:
             direction = "NEUTRAL"
 
-        # Extract confidence
-        conf_match = re.search(r"(\d{1,3})%", prediction_text)
-        confidence = int(conf_match.group(1)) if conf_match else 0
+        # Extract confidence percentage (look for patterns like "70%" or "Confidence: 65%")
 
-        # Extract trend and breakout data
-        trend_breakout = extract_trend_breakout_data(prediction_text)
+        conf_match = re.search(r"(\d{1,3})%", prediction_text)
+        if conf_match:
+            confidence = int(conf_match.group(1))
 
         predictions.append(
             {
                 "analyst_id": result["analyst_id"],
                 "direction": direction,
                 "confidence": confidence,
-                "trend_exists": trend_breakout["trend_exists"],
-                "trend_direction": trend_breakout["trend_direction"],
-                "trend_strength": trend_breakout["trend_strength"],
-                "breakout_exists": trend_breakout["breakout_exists"],
-                "breakout_direction": trend_breakout["breakout_direction"],
-                "breakout_strength": trend_breakout["breakout_strength"],
                 "full_analysis": result,
             }
         )
@@ -222,12 +161,6 @@ def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
     neutral_votes = sum(1 for p in predictions if p["direction"] == "NEUTRAL")
 
     avg_confidence = sum(p["confidence"] for p in predictions) / len(predictions)
-    avg_trend_strength = sum(p["trend_strength"] for p in predictions) / len(
-        predictions
-    )
-    avg_breakout_strength = sum(p["breakout_strength"] for p in predictions) / len(
-        predictions
-    )
 
     # Determine consensus direction
     if up_votes > down_votes and up_votes > neutral_votes:
@@ -237,10 +170,6 @@ def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
     else:
         consensus = "NEUTRAL"
 
-    # Count how many analysts detected trend/breakout
-    trend_count = sum(1 for p in predictions if p["trend_exists"])
-    breakout_count = sum(1 for p in predictions if p["breakout_exists"])
-
     return {
         "consensus_direction": consensus,
         "vote_breakdown": {
@@ -249,10 +178,6 @@ def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
             "NEUTRAL": neutral_votes,
         },
         "avg_confidence": avg_confidence,
-        "avg_trend_strength": avg_trend_strength,
-        "avg_breakout_strength": avg_breakout_strength,
-        "trend_detected_count": trend_count,
-        "breakout_detected_count": breakout_count,
         "predictions": predictions,
         "agreement_level": max(up_votes, down_votes, neutral_votes) / len(predictions),
     }
@@ -266,6 +191,7 @@ def extract_price_bounds(summary_text: str) -> Dict[str, float]:
     bounds = {"above": None, "below": None}
 
     # Look for patterns like "Upper Bound: $500.25" or "Upper Bound**: 500.25"
+    # Handles optional parenthetical text and captures first number in a range
     upper_match = re.search(
         r"Upper Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
         summary_text,
@@ -274,7 +200,8 @@ def extract_price_bounds(summary_text: str) -> Dict[str, float]:
     if upper_match:
         bounds["above"] = float(upper_match.group(1))
 
-    # Look for patterns like "Lower Bound: $495.50"
+    # Look for patterns like "Lower Bound: $495.50" or "Lower Bound (Primary Target): 625.80–625.85"
+    # Handles optional parenthetical text and captures first number in a range
     lower_match = re.search(
         r"Lower Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
         summary_text,
@@ -290,13 +217,11 @@ def extract_price_bounds(summary_text: str) -> Dict[str, float]:
 def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
     """
     Create final summary prompt and get consolidated output.
-    Triggers BLUEHORSESHOE if high confidence + agreement + strong trend/breakout.
+    Only triggers BLUEHORSESHOE if high confidence + agreement.
     """
     consensus = aggregate["consensus_direction"]
     agreement = aggregate["agreement_level"]
     avg_conf = aggregate["avg_confidence"]
-    avg_trend = aggregate["avg_trend_strength"]
-    avg_breakout = aggregate["avg_breakout_strength"]
 
     # Build context from all analysts
     analyst_summaries = []
@@ -311,23 +236,13 @@ def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
         agreement_pct=agreement * 100,
         avg_confidence=avg_conf,
         analyst_summaries="\n---\n".join(analyst_summaries),
-        avg_trend_strength=avg_trend,
-        avg_breakout_strength=avg_breakout,
     )
 
     msg = build_msg([summary_prompt], [])
     final_output = chat(msg)[0].text
 
-    # BLUEHORSESHOE criteria: high agreement + confidence + strong trend/breakout
-    bluehorseshoe_trigger = (
-        agreement >= 1.0  # 100% agreement (both analysts agree)
-        and avg_conf >= 60  # 60% avg confidence
-        and (
-            avg_trend > TREND_STRENGTH_LEVEL or avg_breakout > BREAKOUT_STRENGTH_LEVEL
-        )  # Strong trend OR breakout
-    )
-
-    if bluehorseshoe_trigger:
+    # Only add BLUEHORSESHOE prefix if criteria met
+    if agreement >= 0.67 and avg_conf + 1 >= 60:  # 2/3 agreement + 60% avg confidence
         return f"BLUEHORSESHOE\n\n{final_output}"
     else:
         return final_output
@@ -404,7 +319,7 @@ def cleanup_finished_tasks(
 
 # Main hunting loop
 def pack_hunt(stop_event: Event, alert_task_holder: Dict):
-    """Continuous loop running analysis pipeline with more frequent checks"""
+    """Continuous loop running analysis pipeline"""
     while not stop_event.is_set():
         try:
             current_time = datetime.now().strftime("%H:%M:%S")
@@ -416,62 +331,24 @@ def pack_hunt(stop_event: Event, alert_task_holder: Dict):
             console.print("[cyan]📈 Fetching market data...[/cyan]")
             charts = ticker_scent("QQQ")
 
-            # 2. Run 2 analysts through full pipeline
-            analyst_results = run_pack_pipeline(charts, num_analysts=2)
+            # 2. Run 3 analysts through full pipeline
+            analyst_results = run_pack_pipeline(charts, num_analysts=3)
 
             # 3. Aggregate predictions
             console.print("[cyan]🧮 Aggregating predictions...[/cyan]")
             aggregate = aggregate_predictions(analyst_results)
 
-            # Display aggregate stats
             console.print(
                 f"[yellow]Consensus: {aggregate['consensus_direction']} | "
                 f"Agreement: {aggregate['agreement_level'] * 100:.0f}% | "
                 f"Avg Confidence: {aggregate['avg_confidence']:.0f}%[/yellow]"
             )
-            console.print(
-                f"[yellow]Trend Strength: {aggregate['avg_trend_strength']:.0f}% | "
-                f"Breakout Strength: {aggregate['avg_breakout_strength']:.0f}%[/yellow]"
-            )
 
-            # 4. Check for notification triggers (trend > 50% OR breakout > 50%)
-            significant_signal = (
-                aggregate["avg_trend_strength"] > TREND_STRENGTH_LEVEL
-                or aggregate["avg_breakout_strength"] > BREAKOUT_STRENGTH_LEVEL
-            )
-
-            if significant_signal:
-                console.print(
-                    f"[bold yellow]⚡ SIGNIFICANT SIGNAL DETECTED[/bold yellow]"
-                )
-
-                # Build notification message
-                notification_parts = []
-
-                if aggregate["avg_trend_strength"] > TREND_STRENGTH_LEVEL:
-                    notification_parts.append(
-                        f"🔥 Strong Trend Detected ({aggregate['avg_trend_strength']:.0f}% strength)"
-                    )
-
-                if aggregate["avg_breakout_strength"] > BREAKOUT_STRENGTH_LEVEL:
-                    notification_parts.append(
-                        f"💥 Strong Breakout Detected ({aggregate['avg_breakout_strength']:.0f}% strength)"
-                    )
-
-                notification = (
-                    f"\n{'  •  '.join(notification_parts)}\n"
-                    f"Direction: {aggregate['consensus_direction']} | "
-                    f"Confidence: {aggregate['avg_confidence']:.0f}%"
-                )
-
-                console.print(Markdown(notification))
-                message_queue.put(notification)
-
-            # 5. Generate final summary
+            # 4. Generate final summary
             console.print("[cyan]📝 Generating final summary...[/cyan]")
             final_summary = generate_final_summary(aggregate, analyst_results)
 
-            # 6. Output and alert if BLUEHORSESHOE criteria met
+            # 5. Output and alert if criteria met
             if "BLUEHORSESHOE" in final_summary:
                 console.print(f"\n[bold green]🎯 HIGH CONFIDENCE SIGNAL[/bold green]")
                 console.print(Markdown(final_summary))
@@ -496,10 +373,10 @@ def pack_hunt(stop_event: Event, alert_task_holder: Dict):
                     )
 
             else:
-                console.print(f"[dim]ℹ️  No BLUEHORSESHOE signal this cycle[/dim]")
+                console.print(f"[dim]ℹ️  No high-confidence signal this cycle[/dim]")
 
-            # Wait before next cycle - reduced to 130 seconds (2 minutes) for more frequent checks
-            stop_event.wait(timeout=170)
+            # Wait before next cycle
+            stop_event.wait(timeout=360)
 
         except Exception as e:
             console.print(f"[red]✗ Error in hunt: {e}[/red]")
@@ -616,4 +493,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-
