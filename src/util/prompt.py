@@ -107,17 +107,58 @@ STAGE3_PREDICTION = """Based on your Stage 1 pattern detection and Stage 2 confl
 
 **SYNTHESIS PROCESS:**
 
-1. **Trend Analysis**: 
-   - Examine the last 15-20 candles for directional momentum
-   - Look at higher highs/lower lows sequence
-   - Check if price is above/below moving average (if visible)
-   - Assess consistency of price movement
+1. **Trend Analysis** - Use this QUANTITATIVE FRAMEWORK:
+   
+   Examine the last 15-20 candles and score based on these factors:
+   
+   **A. Directional Consistency (0-40 points)**
+   - Count candles moving in primary direction vs. total candles
+   - 20/20 candles = 40 points | 18/20 = 36 points | 15/20 = 30 points | 12/20 = 24 points | <10/20 = <20 points
+   
+   **B. Higher Highs/Lower Lows Sequence (0-30 points)**
+   - Uptrend: Count consecutive higher highs AND higher lows
+   - Downtrend: Count consecutive lower highs AND lower lows
+   - 8+ clean sequences = 30 points | 6-7 sequences = 24 points | 4-5 sequences = 18 points | 2-3 sequences = 12 points
+   
+   **C. Angle/Momentum (0-30 points)**
+   - Steep, aggressive movement = 30 points
+   - Moderate, steady movement = 20 points
+   - Shallow, gradual movement = 10 points
+   - Flat or erratic = 0 points
+   
+   **TOTAL TREND STRENGTH = Sum of A + B + C**
+   - 90-100 points = 90-100% strength (Very strong trend)
+   - 70-89 points = 70-89% strength (Strong trend)
+   - 50-69 points = 50-69% strength (Moderate trend)
+   - 30-49 points = 30-49% strength (Weak trend)
+   - 0-29 points = 0-29% strength (No clear trend/sideways)
 
-2. **Breakout Analysis**:
-   - Identify if price is breaking through key S/R levels from Stage 2
-   - Check if breakout is accompanied by volume expansion
-   - Assess if price is breaking out of consolidation/range
-   - Evaluate follow-through candles after breakout
+2. **Breakout Analysis** - Use this QUANTITATIVE FRAMEWORK:
+   
+   **A. Level Break Confirmation (0-35 points)**
+   - Clean break of major S/R with body close beyond level = 35 points
+   - Break with close near level (testing) = 25 points
+   - Wick through level only = 15 points
+   - No clear level break = 0 points
+   
+   **B. Volume Confirmation (0-30 points)**
+   - Volume 2x+ higher than recent average = 30 points
+   - Volume 1.5-2x average = 22 points
+   - Volume 1.2-1.5x average = 15 points
+   - Volume at or below average = 0 points
+   
+   **C. Follow-Through Strength (0-35 points)**
+   - 3+ strong candles continuing in breakout direction = 35 points
+   - 2 strong candles with momentum = 25 points
+   - 1 candle then consolidation = 15 points
+   - Immediate reversal/failed breakout = 0 points
+   
+   **TOTAL BREAKOUT STRENGTH = Sum of A + B + C**
+   - 85-100 points = 85-100% strength (Explosive breakout)
+   - 65-84 points = 65-84% strength (Strong breakout)
+   - 45-64 points = 45-64% strength (Moderate breakout)
+   - 25-44 points = 25-44% strength (Weak breakout)
+   - 0-24 points = 0-24% strength (No breakout/false breakout)
 
 3. **Pattern Confluence**: Which pattern(s) have the highest confluence scores (4-5)?
 
@@ -128,14 +169,24 @@ STAGE3_PREDICTION = """Based on your Stage 1 pattern detection and Stage 2 confl
 ## Trend Assessment
 **Trend Exists**: Yes / No
 **Trend Direction**: Up / Down / Sideways
-**Trend Strength**: [X]% (0-100%)
-(Justify: Consider consistency of higher highs/lows, angle of movement, number of consecutive candles in same direction, price position relative to key levels)
+**Trend Strength**: [X]%
+
+**Scoring Breakdown:**
+- Directional Consistency: [X]/40 points ([Y]/20 candles in primary direction)
+- Higher Highs/Lower Lows: [X]/30 points ([Y] consecutive sequences)
+- Angle/Momentum: [X]/30 points (Steep/Moderate/Shallow/Flat)
+- **Total: [X]/100 points = [X]% Trend Strength**
 
 ## Breakout Assessment
 **Breakout Exists**: Yes / No
 **Breakout Direction**: Up / Down / None
-**Breakout Strength**: [X]% (0-100%)
-(Justify: Consider distance from broken level, volume confirmation, speed of breakout, follow-through candles, gap size if present)
+**Breakout Strength**: [X]%
+
+**Scoring Breakdown:**
+- Level Break Confirmation: [X]/35 points (Clean/Testing/Wick-only/None)
+- Volume Confirmation: [X]/30 points ([Y]x average volume)
+- Follow-Through Strength: [X]/35 points ([Y] continuation candles)
+- **Total: [X]/100 points = [X]% Breakout Strength**
 
 ## Primary Setup
 [Describe the highest-confluence pattern and its supporting factors, with emphasis on how it aligns with trend/breakout]
@@ -167,13 +218,15 @@ Explain the 2-3 most important factors:
 - Are there any contradicting factors you're overriding? Why?
 
 **CRITICAL RULES:**
-- Trend Strength 0% = No trend (sideways/choppy), 50% = Moderate trend, 100% = Very strong unidirectional trend
-- Breakout Strength 0% = No breakout or false breakout, 50% = Moderate breakout, 100% = Explosive breakout with confirmation
+- Use the QUANTITATIVE SCORING FRAMEWORK above - be specific with points
+- Trend Strength: Add up A+B+C points, convert total to percentage (e.g., 75 points = 75%)
+- Breakout Strength: Add up A+B+C points, convert total to percentage (e.g., 60 points = 60%)
 - If trend strength < 30% AND no pattern scores above 3, state "No high-conviction setup"
 - Focus on TREND and BREAKOUT as primary signals, patterns as confirmation
 - Be honest about uncertainty - don't force a prediction
 - Focus on what's CLEARLY visible in the charts
 - ALWAYS provide specific numeric price levels for upper and lower bounds
+- Show your scoring work in the "Scoring Breakdown" sections
 """
 
 
@@ -237,4 +290,3 @@ Create a concise final summary (max 250 words) that:
 - MUST include specific numeric price levels for Upper Bound and Lower Bound
 - If analysts provided different price targets, average them or use the most conservative range
 """
-

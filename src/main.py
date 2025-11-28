@@ -27,6 +27,7 @@ from threading import Event
 import asyncio
 import json
 import re
+import argparse
 
 console = Console()
 TREND_STRENGTH_LEVEL = 60
@@ -612,8 +613,15 @@ async def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="control center")
+
+    parser.add_argument("-t", "--threshold", type=float, help="threshold for signals")
+    args = parser.parse_args()
+    if args.threshold:
+        TREND_STRENGTH_LEVEL = args.threshold
+        BREAKOUT_STRENGTH_LEVEL = args.threshold
+
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-
