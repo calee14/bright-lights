@@ -1,3 +1,4 @@
+# src/main.py
 from time import sleep
 from typing import List, Dict
 from anthropic.types import ContentBlock
@@ -12,13 +13,12 @@ from src.util.feed import get_yahoo_finance_data, parse_yahoo_data
 from src.util.plot import plot_recent_candlesticks
 from src.util.vibe import chat, build_msg
 from src.util.prompt import (
-    STAGE1_PATTERN_RECOGNITION,
-    STAGE2_CONFLUENCE_ANALYSIS,
-    STAGE3_PREDICTION,
-    generate_final_alert_prompt,
+    STAGE1_TREND_ANALYSIS,
+    STAGE2_LEVELS_ANALYSIS,
+    STAGE3_REVERSAL_WATCH,
+    generate_final_summary_prompt,
 )
 
-from src.alert import messenger as alert_messenger
 from concurrent.futures import Future, ThreadPoolExecutor
 from rich.markdown import Markdown
 from rich.console import Console
@@ -30,8 +30,11 @@ import re
 import argparse
 
 console = Console()
-TREND_STRENGTH_LEVEL = 60
-BREAKOUT_STRENGTH_LEVEL = 60
+
+# Thresholds for information alerts (not trade signals)
+TREND_STRENGTH_ALERT_LEVEL = 70  # Alert when trend is particularly strong
+REVERSAL_ALERT_LEVEL = 60  # Alert when reversal signals are meaningful
+LEVEL_TEST_DISTANCE_PCT = 1.0  # Alert when within 1% of key level
 
 
 # Single analysis call
@@ -54,35 +57,34 @@ def pipeline_analyst(charts: list[str], analyst_id: int) -> Dict[str, str]:
     Run full 3-stage analysis pipeline for one analyst.
     Returns dict with all stage outputs.
     """
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 1 - Pattern Recognition[/dim]")
+    console.print(f"[dim]  → Analyst {analyst_id}: Stage 1 - Trend Analysis[/dim]")
 
-    # STAGE 1: Pattern Recognition
-    stage1_output = analyze_stage(STAGE1_PATTERN_RECOGNITION, charts)
+    # STAGE 1: Trend Analysis
+    stage1_output = analyze_stage(STAGE1_TREND_ANALYSIS, charts)
 
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 2 - Confluence Analysis[/dim]")
+    console.print(f"[dim]  → Analyst {analyst_id}: Stage 2 - Key Levels Analysis[/dim]")
 
-    # STAGE 2: Confluence Analysis (with Stage 1 context)
-    stage2_context = f"PREVIOUS ANALYSIS (Patterns Identified):\n{stage1_output}"
-    stage2_output = analyze_stage(STAGE2_CONFLUENCE_ANALYSIS, charts, stage2_context)
+    # STAGE 2: Key Levels Analysis (with Stage 1 context)
+    stage2_context = f"PREVIOUS ANALYSIS (Trend Characterization):\n{stage1_output}"
+    stage2_output = analyze_stage(STAGE2_LEVELS_ANALYSIS, charts, stage2_context)
 
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 3 - Prediction[/dim]")
+    console.print(f"[dim]  → Analyst {analyst_id}: Stage 3 - Reversal Watch[/dim]")
 
-    # STAGE 3: Prediction (with full context)
+    # STAGE 3: Reversal Watch (with full context)
     stage3_context = (
-        f"STAGE 1 - PATTERNS:\n{stage1_output}\n\n"
-        f"STAGE 2 - CONFLUENCE:\n{stage2_output}"
+        f"STAGE 1 - TREND:\n{stage1_output}\n\nSTAGE 2 - KEY LEVELS:\n{stage2_output}"
     )
-    stage3_output = analyze_stage(STAGE3_PREDICTION, charts, stage3_context)
+    stage3_output = analyze_stage(STAGE3_REVERSAL_WATCH, charts, stage3_context)
 
     return {
         "analyst_id": analyst_id,
-        "stage1_patterns": stage1_output,
-        "stage2_confluence": stage2_output,
-        "stage3_prediction": stage3_output,
+        "stage1_trend": stage1_output,
+        "stage2_levels": stage2_output,
+        "stage3_reversal": stage3_output,
     }
 
 
-# Run multiple analysts in parallel (each doing full 3-stage pipeline)
+# Run multiple analysts in parallel
 def run_pack_pipeline(charts: list[str], num_analysts: int = 2):
     """
     Run multiple analysts through the 3-stage pipeline concurrently.
@@ -118,294 +120,300 @@ def ticker_scent(ticker: str):
     return charts
 
 
-def extract_trend_breakout_data(prediction_text: str) -> Dict:
+def extract_trend_data(trend_text: str) -> Dict:
     """
-    Extract trend and breakout information from Stage 3 prediction.
-    Returns dict with trend_exists, trend_direction, trend_strength,
-    breakout_exists, breakout_direction, breakout_strength.
+    Extract trend information from Stage 1 analysis.
+    Returns dict with direction, strength, quality, duration.
     """
     data = {
-        "trend_exists": False,
-        "trend_direction": "SIDEWAYS",
-        "trend_strength": 0,
-        "breakout_exists": False,
-        "breakout_direction": "NONE",
-        "breakout_strength": 0,
+        "direction": "SIDEWAYS",
+        "strength": 0,
+        "quality": "Unknown",
+        "duration": 0,
     }
 
-    # Extract Trend Exists
-    if re.search(r"Trend Exists[:\*\s]+Yes", prediction_text, re.IGNORECASE):
-        data["trend_exists"] = True
+    # Extract trend direction
+    if re.search(r"Trend Direction[:\*\s]*Uptrend", trend_text, re.IGNORECASE):
+        data["direction"] = "UPTREND"
+    elif re.search(r"Trend Direction[:\*\s]*Downtrend", trend_text, re.IGNORECASE):
+        data["direction"] = "DOWNTREND"
+    elif re.search(r"Trend Direction[:\*\s]*Sideways", trend_text, re.IGNORECASE):
+        data["direction"] = "SIDEWAYS"
 
-    # Extract Trend Direction
-    trend_dir_match = re.search(
-        r"Trend Direction[:\*\s]+(Up|Down|Sideways)", prediction_text, re.IGNORECASE
+    # Extract trend strength
+    strength_match = re.search(
+        r"Total Score[:\*\s]*(\d{1,3})/100", trend_text, re.IGNORECASE
     )
-    if trend_dir_match:
-        data["trend_direction"] = trend_dir_match.group(1).upper()
+    if strength_match:
+        data["strength"] = int(strength_match.group(1))
 
-    # Extract Trend Strength
-    trend_strength_match = re.search(
-        r"Trend Strength[:\*\s]+(\d{1,3})%", prediction_text, re.IGNORECASE
+    # Extract quality
+    if re.search(r"Trend Quality[:\*\s]*Clean", trend_text, re.IGNORECASE):
+        data["quality"] = "Clean"
+    elif re.search(r"Trend Quality[:\*\s]*Choppy", trend_text, re.IGNORECASE):
+        data["quality"] = "Choppy"
+    elif re.search(r"Trend Quality[:\*\s]*Pausing", trend_text, re.IGNORECASE):
+        data["quality"] = "Pausing"
+
+    # Extract duration (number of candles)
+    duration_match = re.search(
+        r"(\d+)\s+candles in current trend", trend_text, re.IGNORECASE
     )
-    if trend_strength_match:
-        data["trend_strength"] = int(trend_strength_match.group(1))
-
-    # Extract Breakout Exists
-    if re.search(r"Breakout Exists[:\*\s]+Yes", prediction_text, re.IGNORECASE):
-        data["breakout_exists"] = True
-
-    # Extract Breakout Direction
-    breakout_dir_match = re.search(
-        r"Breakout Direction[:\*\s]+(Up|Down|None)", prediction_text, re.IGNORECASE
-    )
-    if breakout_dir_match:
-        data["breakout_direction"] = breakout_dir_match.group(1).upper()
-
-    # Extract Breakout Strength
-    breakout_strength_match = re.search(
-        r"Breakout Strength[:\*\s]+(\d{1,3})%", prediction_text, re.IGNORECASE
-    )
-    if breakout_strength_match:
-        data["breakout_strength"] = int(breakout_strength_match.group(1))
+    if duration_match:
+        data["duration"] = int(duration_match.group(1))
 
     return data
 
 
-# Aggregate predictions from multiple analysts
-def aggregate_predictions(analyst_results: List[Dict]) -> Dict:
+def extract_levels_data(levels_text: str) -> Dict:
     """
-    Parse predictions from all analysts and create consensus view.
-    Returns aggregate statistics including trend/breakout data.
+    Extract support/resistance levels from Stage 2 analysis.
+    Returns dict with support/resistance levels and probabilities.
     """
-    predictions = []
+    data = {
+        "support_levels": [],
+        "resistance_levels": [],
+        "critical_level": None,
+    }
 
-    for result in analyst_results:
-        prediction_text = result["stage3_prediction"]
-
-        # Extract direction
-        direction = None
-        if "Direction: Up" in prediction_text or "Direction:** Up" in prediction_text:
-            direction = "UP"
-        elif (
-            "Direction: Down" in prediction_text
-            or "Direction:** Down" in prediction_text
-        ):
-            direction = "DOWN"
-        else:
-            direction = "NEUTRAL"
-
-        # Extract confidence
-        conf_match = re.search(r"(\d{1,3})%", prediction_text)
-        confidence = int(conf_match.group(1)) if conf_match else 0
-
-        # Extract trend and breakout data
-        trend_breakout = extract_trend_breakout_data(prediction_text)
-
-        predictions.append(
+    # Extract support levels
+    support_pattern = r"Support \d+:\s*\$?(\d+\.?\d*)\s*.*?Strength Rating:\s*(\d+)/100.*?Hold Probability:\s*(\d+)%"
+    for match in re.finditer(support_pattern, levels_text, re.IGNORECASE | re.DOTALL):
+        data["support_levels"].append(
             {
-                "analyst_id": result["analyst_id"],
-                "direction": direction,
-                "confidence": confidence,
-                "trend_exists": trend_breakout["trend_exists"],
-                "trend_direction": trend_breakout["trend_direction"],
-                "trend_strength": trend_breakout["trend_strength"],
-                "breakout_exists": trend_breakout["breakout_exists"],
-                "breakout_direction": trend_breakout["breakout_direction"],
-                "breakout_strength": trend_breakout["breakout_strength"],
-                "full_analysis": result,
+                "price": float(match.group(1)),
+                "strength": int(match.group(2)),
+                "hold_probability": int(match.group(3)),
             }
         )
 
-    # Calculate consensus
-    up_votes = sum(1 for p in predictions if p["direction"] == "UP")
-    down_votes = sum(1 for p in predictions if p["direction"] == "DOWN")
-    neutral_votes = sum(1 for p in predictions if p["direction"] == "NEUTRAL")
+    # Extract resistance levels
+    resistance_pattern = r"Resistance \d+:\s*\$?(\d+\.?\d*)\s*.*?Strength Rating:\s*(\d+)/100.*?Hold Probability:\s*(\d+)%"
+    for match in re.finditer(
+        resistance_pattern, levels_text, re.IGNORECASE | re.DOTALL
+    ):
+        data["resistance_levels"].append(
+            {
+                "price": float(match.group(1)),
+                "strength": int(match.group(2)),
+                "hold_probability": int(match.group(3)),
+            }
+        )
 
-    avg_confidence = sum(p["confidence"] for p in predictions) / len(predictions)
-    avg_trend_strength = sum(p["trend_strength"] for p in predictions) / len(
-        predictions
+    return data
+
+
+def extract_reversal_data(reversal_text: str) -> Dict:
+    """
+    Extract reversal information from Stage 3 analysis.
+    Returns dict with reversal score and probability.
+    """
+    data = {
+        "reversal_score": 0,
+        "reversal_probability": 0,
+        "warning_signs": [],
+    }
+
+    # Extract reversal score
+    score_match = re.search(
+        r"Reversal Score:\s*(\d{1,3})/100", reversal_text, re.IGNORECASE
     )
-    avg_breakout_strength = sum(p["breakout_strength"] for p in predictions) / len(
-        predictions
+    if score_match:
+        data["reversal_score"] = int(score_match.group(1))
+
+    # Extract reversal probability
+    prob_match = re.search(
+        r"Reversal Probability:\s*(\d{1,3})%", reversal_text, re.IGNORECASE
     )
+    if prob_match:
+        data["reversal_probability"] = int(prob_match.group(1))
 
-    # Determine consensus direction
-    if up_votes > down_votes and up_votes > neutral_votes:
-        consensus = "UP"
-    elif down_votes > up_votes and down_votes > neutral_votes:
-        consensus = "DOWN"
-    else:
-        consensus = "NEUTRAL"
+    return data
 
-    # Count how many analysts detected trend/breakout
-    trend_count = sum(1 for p in predictions if p["trend_exists"])
-    breakout_count = sum(1 for p in predictions if p["breakout_exists"])
+
+# Aggregate analysis from multiple analysts
+def aggregate_analysis(analyst_results: List[Dict]) -> Dict:
+    """
+    Parse analysis from all analysts and create consensus view.
+    Returns aggregate statistics for informational purposes.
+    """
+    trend_data = []
+    levels_data = []
+    reversal_data = []
+
+    for result in analyst_results:
+        # Extract data from each stage
+        trend_info = extract_trend_data(result["stage1_trend"])
+        levels_info = extract_levels_data(result["stage2_levels"])
+        reversal_info = extract_reversal_data(result["stage3_reversal"])
+
+        trend_data.append(trend_info)
+        levels_data.append(levels_info)
+        reversal_data.append(reversal_info)
+
+    # Calculate trend consensus
+    directions = [t["direction"] for t in trend_data]
+    direction_counts = {d: directions.count(d) for d in set(directions)}
+    consensus_direction = max(direction_counts, key=direction_counts.get)
+    direction_agreement = direction_counts[consensus_direction] / len(directions)
+
+    avg_trend_strength = sum(t["strength"] for t in trend_data) / len(trend_data)
+
+    # Get most common quality
+    qualities = [t["quality"] for t in trend_data]
+    consensus_quality = max(set(qualities), key=qualities.count)
+
+    # Calculate levels consensus
+    all_supports = []
+    all_resistances = []
+    for levels in levels_data:
+        all_supports.extend(levels["support_levels"])
+        all_resistances.extend(levels["resistance_levels"])
+
+    # Find strongest support (closest to current price with highest strength)
+    strongest_support = None
+    if all_supports:
+        strongest_support = max(all_supports, key=lambda x: x["strength"])
+
+    # Find strongest resistance
+    strongest_resistance = None
+    if all_resistances:
+        strongest_resistance = max(all_resistances, key=lambda x: x["strength"])
+
+    # Calculate reversal consensus
+    avg_reversal_score = sum(r["reversal_score"] for r in reversal_data) / len(
+        reversal_data
+    )
+    avg_reversal_prob = sum(r["reversal_probability"] for r in reversal_data) / len(
+        reversal_data
+    )
 
     return {
-        "consensus_direction": consensus,
-        "vote_breakdown": {
-            "UP": up_votes,
-            "DOWN": down_votes,
-            "NEUTRAL": neutral_votes,
+        "trend_consensus": {
+            "direction": consensus_direction,
+            "direction_agreement": direction_agreement * 100,
+            "avg_strength": avg_trend_strength,
+            "quality": consensus_quality,
         },
-        "avg_confidence": avg_confidence,
-        "avg_trend_strength": avg_trend_strength,
-        "avg_breakout_strength": avg_breakout_strength,
-        "trend_detected_count": trend_count,
-        "breakout_detected_count": breakout_count,
-        "predictions": predictions,
-        "agreement_level": max(up_votes, down_votes, neutral_votes) / len(predictions),
+        "levels_consensus": {
+            "strongest_support": strongest_support["price"] if strongest_support else 0,
+            "support_strength": strongest_support["strength"]
+            if strongest_support
+            else 0,
+            "support_hold_prob": strongest_support["hold_probability"]
+            if strongest_support
+            else 0,
+            "strongest_resistance": strongest_resistance["price"]
+            if strongest_resistance
+            else 0,
+            "resistance_strength": strongest_resistance["strength"]
+            if strongest_resistance
+            else 0,
+            "resistance_hold_prob": strongest_resistance["hold_probability"]
+            if strongest_resistance
+            else 0,
+            "current_price": 0,  # Will be filled in with actual current price
+        },
+        "reversal_consensus": {
+            "avg_score": avg_reversal_score,
+            "avg_probability": avg_reversal_prob,
+        },
+        "raw_data": {
+            "trend_data": trend_data,
+            "levels_data": levels_data,
+            "reversal_data": reversal_data,
+        },
     }
 
 
-def extract_price_bounds(summary_text: str) -> Dict[str, float]:
+# Generate final informational summary
+def generate_final_summary(
+    aggregate: Dict, analyst_results: List[Dict], current_price: float
+) -> str:
     """
-    Extract upper and lower price bounds from the final summary.
-    Returns dict with 'above' and 'below' keys.
+    Create final informational summary without trade recommendations.
     """
-    bounds = {"above": None, "below": None}
-
-    # Look for patterns like "Upper Bound: $500.25" or "Upper Bound**: 500.25"
-    upper_match = re.search(
-        r"Upper Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
-        summary_text,
-        re.IGNORECASE,
-    )
-    if upper_match:
-        bounds["above"] = float(upper_match.group(1))
-
-    # Look for patterns like "Lower Bound: $495.50"
-    lower_match = re.search(
-        r"Lower Bound\s*(?:\([^)]*\))?\s*[:\*\s]+\$?(\d+\.?\d*)",
-        summary_text,
-        re.IGNORECASE,
-    )
-    if lower_match:
-        bounds["below"] = float(lower_match.group(1))
-
-    return bounds
-
-
-# Generate final summary with consensus
-def generate_final_summary(aggregate: Dict, analyst_results: List[Dict]) -> str:
-    """
-    Create final summary prompt and get consolidated output.
-    Triggers BLUEHORSESHOE if high confidence + agreement + strong trend/breakout.
-    """
-    consensus = aggregate["consensus_direction"]
-    agreement = aggregate["agreement_level"]
-    avg_conf = aggregate["avg_confidence"]
-    avg_trend = aggregate["avg_trend_strength"]
-    avg_breakout = aggregate["avg_breakout_strength"]
+    # Update current price in aggregate
+    aggregate["levels_consensus"]["current_price"] = current_price
 
     # Build context from all analysts
     analyst_summaries = []
     for result in analyst_results:
         summary = (
-            f"**Analyst {result['analyst_id']}:**\n{result['stage3_prediction']}\n"
+            f"**Analyst {result['analyst_id']}:**\n\n"
+            f"Trend: {result['stage1_trend']}\n\n"
+            f"Levels: {result['stage2_levels']}\n\n"
+            f"Reversal: {result['stage3_reversal']}\n"
         )
         analyst_summaries.append(summary)
 
-    summary_prompt = generate_final_alert_prompt(
-        consensus=consensus,
-        agreement_pct=agreement * 100,
-        avg_confidence=avg_conf,
+    summary_prompt = generate_final_summary_prompt(
+        trend_consensus=aggregate["trend_consensus"],
+        levels_consensus=aggregate["levels_consensus"],
+        reversal_consensus=aggregate["reversal_consensus"],
         analyst_summaries="\n---\n".join(analyst_summaries),
-        avg_trend_strength=avg_trend,
-        avg_breakout_strength=avg_breakout,
     )
 
     msg = build_msg([summary_prompt], [])
     final_output = chat(msg)[0].text
 
-    # BLUEHORSESHOE criteria: high agreement + confidence + strong trend/breakout
-    bluehorseshoe_trigger = (
-        agreement >= 1.0  # 100% agreement (both analysts agree)
-        and avg_conf >= 60  # 60% avg confidence
-        and (
-            avg_trend > TREND_STRENGTH_LEVEL or avg_breakout > BREAKOUT_STRENGTH_LEVEL
-        )  # Strong trend OR breakout
-    )
-
-    if bluehorseshoe_trigger:
-        return f"BLUEHORSESHOE\n\n{final_output}"
-    else:
-        return final_output
+    return final_output
 
 
-async def start_price_alert(alert_args: Dict, alert_id: int):
+def generate_information_alerts(aggregate: Dict, current_price: float) -> List[str]:
     """
-    Start a price alert monitor in a separate task.
-    Runs the alert module asynchronously.
+    Generate information alerts based on market conditions.
+    These are NOT trade signals, but important market state notifications.
     """
-    try:
-        console.print(f"[green]🔔 Starting price alert monitor #{alert_id}...[/green]")
-        console.print(
-            f"[yellow]  → Upper bound (above): ${alert_args.get('above', 'N/A')}[/yellow]"
-        )
-        console.print(
-            f"[yellow]  → Lower bound (below): ${alert_args.get('below', 'N/A')}[/yellow]"
+    alerts = []
+
+    trend = aggregate["trend_consensus"]
+    levels = aggregate["levels_consensus"]
+    reversal = aggregate["reversal_consensus"]
+
+    # Alert 1: Strong trend detected
+    if trend["avg_strength"] >= TREND_STRENGTH_ALERT_LEVEL:
+        alerts.append(
+            f"📊 Strong {trend['direction']} detected ({trend['avg_strength']:.0f}/100 strength)"
         )
 
-        # Run the alert messenger
-        await alert_messenger(alert_args)
+    # Alert 2: Approaching key level
+    support_price = levels["strongest_support"]
+    resistance_price = levels["strongest_resistance"]
 
-        console.print(f"[green]✓ Alert #{alert_id} completed (target reached)[/green]")
+    if support_price > 0:
+        distance_to_support_pct = abs(
+            (current_price - support_price) / current_price * 100
+        )
+        if distance_to_support_pct <= LEVEL_TEST_DISTANCE_PCT:
+            alerts.append(
+                f"⚠️  Approaching key support at ${support_price:.2f} "
+                f"({levels['support_hold_prob']:.0f}% hold probability)"
+            )
 
-    except asyncio.CancelledError:
-        console.print(f"[dim]Alert #{alert_id} cancelled[/dim]")
-        raise
-    except ImportError as e:
-        console.print(f"[red]✗ Could not import alert module: {e}[/red]")
-    except Exception as e:
-        console.print(f"[red]✗ Error in price alert #{alert_id}: {e}[/red]")
+    if resistance_price > 0:
+        distance_to_resistance_pct = abs(
+            (resistance_price - current_price) / current_price * 100
+        )
+        if distance_to_resistance_pct <= LEVEL_TEST_DISTANCE_PCT:
+            alerts.append(
+                f"⚠️  Approaching key resistance at ${resistance_price:.2f} "
+                f"({levels['resistance_hold_prob']:.0f}% hold probability)"
+            )
 
-
-def cleanup_finished_tasks(
-    alert_tasks: List[asyncio.Task], max_tasks: int = 3
-) -> List[asyncio.Task]:
-    """
-    Remove completed or cancelled tasks from the list.
-    If more than max_tasks are running, cancel the oldest ones.
-    Returns a new list with only active tasks (up to max_tasks).
-    """
-    active_tasks = []
-
-    # First pass: separate finished from active tasks
-    for task in alert_tasks:
-        if task.done():
-            # Log any exceptions that occurred
-            try:
-                task.result()
-            except asyncio.CancelledError:
-                pass  # Expected when we cancel
-            except Exception as e:
-                console.print(f"[red]Task failed with error: {e}[/red]")
-        else:
-            active_tasks.append(task)
-
-    # Second pass: if we have too many active tasks, cancel the oldest ones
-    if len(active_tasks) > max_tasks:
-        tasks_to_cancel = active_tasks[:-max_tasks]  # All except the last max_tasks
-        tasks_to_keep = active_tasks[-max_tasks:]  # Keep only the last max_tasks
-
-        console.print(
-            f"[yellow]⚠️  Too many active alerts ({len(active_tasks)}). "
-            f"Cancelling {len(tasks_to_cancel)} oldest alert(s)...[/yellow]"
+    # Alert 3: Reversal signals
+    if reversal["avg_score"] >= REVERSAL_ALERT_LEVEL:
+        alerts.append(
+            f"🔄 Reversal signals present (Score: {reversal['avg_score']:.0f}/100, "
+            f"Probability: {reversal['avg_probability']:.0f}%)"
         )
 
-        for task in tasks_to_cancel:
-            task.cancel()
-
-        return tasks_to_keep
-
-    return active_tasks
+    return alerts
 
 
-# Main hunting loop
-def pack_hunt(stop_event: Event, alert_task_holder: Dict):
-    """Continuous loop running analysis pipeline with more frequent checks"""
+# Main monitoring loop
+def pack_hunt(stop_event: Event):
+    """Continuous loop running informational analysis"""
     while not stop_event.is_set():
         try:
             current_time = datetime.now().strftime("%H:%M:%S")
@@ -417,95 +425,60 @@ def pack_hunt(stop_event: Event, alert_task_holder: Dict):
             console.print("[cyan]📈 Fetching market data...[/cyan]")
             charts = ticker_scent("QQQ")
 
+            # Get current price
+            current_data = parse_yahoo_data(
+                get_yahoo_finance_data("QQQ", lookback=3600, interval="1m")
+            )
+            current_price = (
+                float(current_data.iloc[-1]["Close"]) if len(current_data) > 0 else 0
+            )
+
             # 2. Run 2 analysts through full pipeline
             analyst_results = run_pack_pipeline(charts, num_analysts=2)
 
-            # 3. Aggregate predictions
-            console.print("[cyan]🧮 Aggregating predictions...[/cyan]")
-            aggregate = aggregate_predictions(analyst_results)
+            # 3. Aggregate analysis
+            console.print("[cyan]🧮 Aggregating analysis...[/cyan]")
+            aggregate = aggregate_analysis(analyst_results)
 
             # Display aggregate stats
             console.print(
-                f"[yellow]Consensus: {aggregate['consensus_direction']} | "
-                f"Agreement: {aggregate['agreement_level'] * 100:.0f}% | "
-                f"Avg Confidence: {aggregate['avg_confidence']:.0f}%[/yellow]"
+                f"[yellow]Trend: {aggregate['trend_consensus']['direction']} "
+                f"(Strength: {aggregate['trend_consensus']['avg_strength']:.0f}/100, "
+                f"Quality: {aggregate['trend_consensus']['quality']})[/yellow]"
             )
             console.print(
-                f"[yellow]Trend Strength: {aggregate['avg_trend_strength']:.0f}% | "
-                f"Breakout Strength: {aggregate['avg_breakout_strength']:.0f}%[/yellow]"
+                f"[yellow]Reversal Watch: {aggregate['reversal_consensus']['avg_score']:.0f}/100 score, "
+                f"{aggregate['reversal_consensus']['avg_probability']:.0f}% probability[/yellow]"
             )
 
-            # 4. Check for notification triggers (trend > 50% OR breakout > 50%)
-            significant_signal = (
-                aggregate["avg_trend_strength"] > TREND_STRENGTH_LEVEL
-                or aggregate["avg_breakout_strength"] > BREAKOUT_STRENGTH_LEVEL
+            # 4. Generate information alerts
+            alerts = generate_information_alerts(aggregate, current_price)
+
+            if alerts:
+                console.print(f"[bold yellow]📢 Information Alerts:[/bold yellow]")
+                for alert in alerts:
+                    console.print(f"[yellow]  • {alert}[/yellow]")
+                    message_queue.put(alert)
+
+            # 5. Generate and display final summary
+            console.print("[cyan]📝 Generating market summary...[/cyan]")
+            final_summary = generate_final_summary(
+                aggregate, analyst_results, current_price
             )
 
-            if significant_signal:
-                console.print(
-                    f"[bold yellow]⚡ SIGNIFICANT SIGNAL DETECTED[/bold yellow]"
-                )
+            console.print(f"\n[bold green]═══ Market Summary ═══[/bold green]")
+            console.print(Markdown(final_summary))
 
-                # Build notification message
-                notification_parts = []
+            # Send summary to bot
+            message_queue.put(f"\n{final_summary}")
 
-                if aggregate["avg_trend_strength"] > TREND_STRENGTH_LEVEL:
-                    notification_parts.append(
-                        f"🔥 Strong Trend Detected ({aggregate['avg_trend_strength']:.0f}% strength)"
-                    )
-
-                if aggregate["avg_breakout_strength"] > BREAKOUT_STRENGTH_LEVEL:
-                    notification_parts.append(
-                        f"💥 Strong Breakout Detected ({aggregate['avg_breakout_strength']:.0f}% strength)"
-                    )
-
-                notification = (
-                    f"\n{'  •  '.join(notification_parts)}\n"
-                    f"Direction: {aggregate['consensus_direction']} | "
-                    f"Confidence: {aggregate['avg_confidence']:.0f}%"
-                )
-
-                console.print(Markdown(notification))
-                message_queue.put(notification)
-
-            # 5. Generate final summary
-            console.print("[cyan]📝 Generating final summary...[/cyan]")
-            final_summary = generate_final_summary(aggregate, analyst_results)
-
-            # 6. Output and alert if BLUEHORSESHOE criteria met
-            if "BLUEHORSESHOE" in final_summary:
-                console.print(f"\n[bold green]🎯 HIGH CONFIDENCE SIGNAL[/bold green]")
-                console.print(Markdown(final_summary))
-                message_queue.put(final_summary)
-
-                # Extract price bounds and start alert monitoring
-                price_bounds = extract_price_bounds(final_summary)
-
-                if price_bounds["above"] or price_bounds["below"]:
-                    alert_args = {
-                        "above": price_bounds["above"],
-                        "below": price_bounds["below"],
-                    }
-                    # Store the alert task creation request
-                    alert_task_holder["pending_alert"] = alert_args
-                    console.print(
-                        f"[green]✓ Alert parameters extracted and queued[/green]"
-                    )
-                else:
-                    console.print(
-                        f"[yellow]⚠️  Could not extract price bounds from summary[/yellow]"
-                    )
-
-            else:
-                console.print(f"[dim]ℹ️  No BLUEHORSESHOE signal this cycle[/dim]")
-
-            # Wait before next cycle - reduced to 130 seconds (2 minutes) for more frequent checks
-            stop_event.wait(timeout=170)
+            # Wait before next cycle
+            stop_event.wait(timeout=170)  # ~3 minutes between analyses
 
         except Exception as e:
-            console.print(f"[red]✗ Error in hunt: {e}[/red]")
+            console.print(f"[red]✗ Error in analysis cycle: {e}[/red]")
             console.print(f"[red]{type(e).__name__}: {str(e)}[/red]")
-            stop_event.wait(timeout=60)  # Wait before retry
+            stop_event.wait(timeout=60)
 
 
 def on_hunt_complete(_: Future):
@@ -513,11 +486,11 @@ def on_hunt_complete(_: Future):
     try:
         console.print("\n[bold green]═══ ANALYSIS PERIOD ENDED ═══[/bold green]")
     except Exception as e:
-        console.print(f"[red]✗ Pack hunt failed: {e}[/red]")
+        console.print(f"[red]✗ Analysis failed: {e}[/red]")
 
 
 async def main():
-    console.print("[bold cyan]🚀 Pack Analysis System Starting...[/bold cyan]")
+    console.print("[bold cyan]🚀 Market Information System Starting...[/bold cyan]")
     console.print("[dim]Press Ctrl+C to exit[/dim]\n")
 
     bot_task = asyncio.create_task(start_bot())
@@ -528,43 +501,18 @@ async def main():
     messenger_task = asyncio.create_task(messenger())
 
     stop_event = Event()
-    executor = ThreadPoolExecutor(max_workers=2)
+    executor = ThreadPoolExecutor(max_workers=1)
 
-    # Holder for alert tasks and parameters
-    alert_task_holder: Dict = {
-        "pending_alert": None,
-        "alert_tasks": [],
-        "alert_counter": 0,  # Track alert IDs
-    }
     try:
-        hunt_future = executor.submit(pack_hunt, stop_event, alert_task_holder)
+        hunt_future = executor.submit(pack_hunt, stop_event)
         hunt_future.add_done_callback(on_hunt_complete)
 
         while not stop_event.is_set():
             if hunt_future.done():
-                console.print("[yellow]Hunt worker stopped[/yellow]")
+                console.print("[yellow]Analysis worker stopped[/yellow]")
                 break
 
-            # Clean up finished tasks
-            alert_task_holder["alert_tasks"] = cleanup_finished_tasks(
-                alert_task_holder["alert_tasks"]
-            )
-
-            # Check if there's a pending alert to start
-            if alert_task_holder["pending_alert"] is not None:
-                alert_args = alert_task_holder["pending_alert"]
-                alert_task_holder["alert_counter"] += 1
-                alert_id = alert_task_holder["alert_counter"]
-
-                # Create and add new alert task
-                new_task = asyncio.create_task(start_price_alert(alert_args, alert_id))
-                alert_task_holder["alert_tasks"].append(new_task)
-                alert_task_holder["pending_alert"] = None
-
-                console.print(
-                    f"[green]✓ Alert #{alert_id} started (Total active: {len(alert_task_holder['alert_tasks'])})[/green]"
-                )
-            await asyncio.sleep(5)  # Check every 5 seconds
+            await asyncio.sleep(5)
 
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]⚠️  Shutting down gracefully...[/yellow]")
@@ -575,21 +523,6 @@ async def main():
         stop_event.set()
         executor.shutdown(wait=True)
         console.print("[dim]✓ Executor shut down[/dim]")
-
-        # Cancel all alert tasks
-        if alert_task_holder["alert_tasks"]:
-            console.print(
-                f"[dim]Cancelling {len(alert_task_holder['alert_tasks'])} alert task(s)...[/dim]"
-            )
-            for task in alert_task_holder["alert_tasks"]:
-                if not task.done():
-                    task.cancel()
-
-            # Wait for all to complete cancellation
-            await asyncio.gather(
-                *alert_task_holder["alert_tasks"], return_exceptions=True
-            )
-            console.print("[dim]✓ All alert tasks cancelled[/dim]")
 
         messenger_task.cancel()
         try:
@@ -613,13 +546,35 @@ async def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="control center")
+    parser = argparse.ArgumentParser(description="Market Information System")
 
-    parser.add_argument("-t", "--threshold", type=float, help="threshold for signals")
+    parser.add_argument(
+        "-ts",
+        "--trend-strength",
+        type=float,
+        help="Alert threshold for trend strength (0-100, default 70)",
+        default=70,
+    )
+    parser.add_argument(
+        "-rs",
+        "--reversal-score",
+        type=float,
+        help="Alert threshold for reversal score (0-100, default 60)",
+        default=60,
+    )
+    parser.add_argument(
+        "-ld",
+        "--level-distance",
+        type=float,
+        help="Alert when within X%% of key level (default 1.0)",
+        default=1.0,
+    )
+
     args = parser.parse_args()
-    if args.threshold:
-        TREND_STRENGTH_LEVEL = args.threshold
-        BREAKOUT_STRENGTH_LEVEL = args.threshold
+
+    TREND_STRENGTH_ALERT_LEVEL = args.trend_strength
+    REVERSAL_ALERT_LEVEL = args.reversal_score
+    LEVEL_TEST_DISTANCE_PCT = args.level_distance
 
     try:
         asyncio.run(main())
