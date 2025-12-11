@@ -12,7 +12,7 @@ from src.util.bot import (
 from src.util.feed import get_yahoo_finance_data, parse_yahoo_data
 from src.util.plot import plot_recent_candlesticks
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, thread
 from rich.markdown import Markdown
 from rich.console import Console
 from datetime import datetime
@@ -27,15 +27,15 @@ console = Console()
 
 def std_alert(data, std=2.0):
     """
+    Makes a alert whenever the current
+    price (last row in df) reaches
+    the std threshold.
+
     Args:
         data: Pandas dataframe
         std: Float
     Returns:
         dict containing signal
-
-    Makes a alert whenever the current
-    price (last row in df) reaches
-    the std threshold.
     """
 
     window = min(20, len(data) - 1)
@@ -98,6 +98,10 @@ def calculate_roc(data, period=5):
 
 def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0.3):
     """
+    Makes an alert whenever the ratio
+    of bullish vs. bearish scores
+    break the threshold.
+
     Args:
         data: Pandas dataframe
         threshold: Float
@@ -105,10 +109,6 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
         decay_rate: Float
     Returns:
         dict containing signal
-
-    Makes an alert whenever the ratio
-    of bullish vs. bearish scores
-    break the threshold.
     """
 
     recent_data = data.tail(n_candles).copy()
@@ -215,17 +215,17 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
 
 def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
     """
+    Makes an alert whenever the
+    current volume is greater than
+    the avg volume by a factor of
+    the threshold.
+
     Args:
         data: Pandas dataframe
         threshold: Float
         n_candles: Integer
     Returns:
         dict containing signal
-
-    Makes an alert whenever the
-    current volume is greater than
-    the avg volume by a factor of
-    the threshold.
     """
 
     if len(data) < n_candles + 1:
@@ -288,7 +288,7 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.65, n_candles=13, decay_rate=0.9, roc_weight=0.39
+            data, threshold=0.65, n_candles=13, decay_rate=0.9, roc_weight=0.5
         )
         volume_signal = volume_anomaly_alert(data, threshold=2.1, n_candles=10)
 
@@ -307,6 +307,10 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
 
 
 def display_alerts(alerts: Optional[Dict[Any, Any]]):
+    """
+    Dislay alerts in terminal
+    and on Discord
+    """
     if alerts is None:
         return
 
@@ -324,6 +328,18 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         console.print(f"Deviation: {std_signal['deviation']:.2f} standard deviations")
         console.print(f"Volume Ratio: {std_signal['volume_ratio']:.2f}x average")
 
+        # Send to Discord
+        discord_msg = (
+            f"🔔 **MEAN REVERSION ALERT!**\n"
+            f"Time: {std_signal['timestamp'].strftime('%H:%M:%S')}\n"
+            f"Direction: {std_signal['direction']}\n"
+            f"Current Price: ${std_signal['current_price']:.2f}\n"
+            f"Mean: ${std_signal['mean']:.2f}\n"
+            f"Deviation: {std_signal['deviation']:.2f} standard deviations\n"
+            f"Volume Ratio: {std_signal['volume_ratio']:.2f}x average"
+        )
+        message_queue.put(discord_msg)
+
     if trend_signal:
         console.print("\n[bold green]🔔 TREND ALERT![/bold green]")
         console.print(
@@ -338,6 +354,19 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         console.print(f"Green Score: {trend_signal['green_score']:.2f}")
         console.print(f"Red Score: {trend_signal['red_score']:.2f}")
 
+        # Send to Discord
+        discord_msg = (
+            f"🔔 **TREND ALERT!**\n"
+            f"Time: {trend_signal['timestamp'].strftime('%H:%M:%S')}\n"
+            f"Direction: {trend_signal['direction']}\n"
+            f"Strength: {trend_signal['strength']}\n"
+            f"Momentum: {trend_signal['momentum']} ({trend_signal['roc']:+.2f}%)\n"
+            f"Ratio: {trend_signal['ratio']:.2%}\n"
+            f"Green Score: {trend_signal['green_score']:.2f}\n"
+            f"Red Score: {trend_signal['red_score']:.2f}"
+        )
+        message_queue.put(discord_msg)
+
     if volume_signal:
         console.print("\n[bold yellow]🔔 VOLUME SPIKE ALERT![/bold yellow]")
         console.print(
@@ -351,6 +380,23 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         console.print(f"Strength: {volume_signal['strength']}")
         if volume_signal["is_accelerating"]:
             console.print("[red]⚠️  Volume is ACCELERATING![/red]")
+
+        # Send to Discord
+        accelerating_text = ""
+        if volume_signal["is_accelerating"]:
+            console.print("[red]⚠️  Volume is ACCELERATING![/red]")
+            accelerating_text = "\n⚠️ Volume is ACCELERATING!"
+
+        discord_msg = (
+            f"🔔 **VOLUME SPIKE ALERT!**\n"
+            f"Time: {volume_signal['timestamp'].strftime('%H:%M:%S')}\n"
+            f"Current Volume: {volume_signal['current_volume']:,}\n"
+            f"Average Volume: {volume_signal['avg_volume']:,}\n"
+            f"Ratio: {volume_signal['volume_ratio']}x (threshold: {volume_signal['threshold']}x)\n"
+            f"Strength: {volume_signal['strength']}"
+            f"{accelerating_text}"
+        )
+        message_queue.put(discord_msg)
 
 
 def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
@@ -403,8 +449,13 @@ def start_alert_monitor_thread(symbol="QQQ", interval_seconds=60):
     return monitor_thread, stop_event
 
 
-if __name__ == "__main__":
+async def main():
     console.print("Bells coming online...")
+
+    bot_task = asyncio.create_task(start_bot())
+    messenger_task = asyncio.create_task(messenger())
+    while not is_bot_ready():
+        await asyncio.sleep(0.2)
 
     monitor_thread, stop_event = start_alert_monitor_thread(
         symbol="QQQ", interval_seconds=60
@@ -415,10 +466,34 @@ if __name__ == "__main__":
 
     try:
         while True:
-            sleep(0.1)
+            await asyncio.sleep(1)
 
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        console.print("\n[yellow]⚠️  Shutting down gracefully...[/yellow]")
+    finally:
         console.print("\n[yellow]Shutting down...[/yellow]")
+        bot_task.cancel()
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            console.print("[dim]✓ Bot task cancelled[/dim]")
+
+        messenger_task.cancel()
+        try:
+            await messenger_task
+        except asyncio.CancelledError:
+            console.print("[dim]✓ Messenger cancelled[/dim]")
+
         stop_event.set()
         monitor_thread.join(timeout=2)  # Wait up to 2 seconds for thread to finish
+
+        await stop_bot()
+
         console.print("[green]✓ Clean shutdown complete.[/green]")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
