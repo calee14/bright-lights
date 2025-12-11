@@ -2,7 +2,6 @@
 import threading
 from time import sleep, time
 from typing import Any, List, Dict, Optional
-from anthropic.types import ContentBlock
 from src.util.bot import (
     message_queue,
     messenger,
@@ -281,7 +280,7 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
 
     try:
         data = parse_yahoo_data(
-            get_yahoo_finance_data("QQQ", lookback=3600, interval="1m", offset=28600)
+            get_yahoo_finance_data("QQQ", lookback=3600, interval="1m", offset=0)
         )
 
         plot_recent_candlesticks(data, filename="charts/tminus60.jpeg")
