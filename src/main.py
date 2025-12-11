@@ -288,7 +288,7 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.65, n_candles=13, decay_rate=0.8, roc_weight=0.5
+            data, threshold=0.65, n_candles=13, decay_rate=0.9, roc_weight=0.39
         )
         volume_signal = volume_anomaly_alert(data, threshold=2.1, n_candles=10)
 
