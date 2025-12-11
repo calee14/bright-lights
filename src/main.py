@@ -113,10 +113,6 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
 
     recent_data = data.tail(n_candles).copy()
 
-    avg_volume = data["Volume"].mean()
-    if avg_volume == 0:
-        avg_volume = 1
-
     # Calculate score for upward
     # and downward momentum based
     # on price movement and volume
@@ -134,8 +130,6 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
         price_move = abs(
             (row["Close"] - row["Open"]) / row["Open"] if row["Open"] != 0 else 0
         )
-
-        volume_factor = row["Volume"] / avg_volume
 
         # Calculate rate of change
         # and add it to score
@@ -157,12 +151,7 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
             if is_green_candle:
                 # Green candle: boost for ROC > 0
                 # and penalize for ROC < 0
-                if roc_normalized > 0:
-                    roc_multiplier = 1.0 + (roc_normalized * roc_weight)
-                else:
-                    roc_multiplier = 1.0 + (
-                        roc_normalized * roc_weight
-                    )  # Will be < 1.0
+                roc_multiplier = 1.0 + (roc_normalized * roc_weight)
             else:
                 # Red candle: boost for ROC < 0
                 # and penalize for ROC > 0
@@ -174,7 +163,7 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
         else:
             roc_multiplier = 1.0
 
-        candle_score = price_move * volume_factor * time_weight * roc_multiplier
+        candle_score = price_move * time_weight * roc_multiplier
 
         # Accumulate scores by direction
         if row["Close"] >= row["Open"]:
