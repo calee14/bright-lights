@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 
 
-def get_yahoo_finance_data(symbol, lookback=3600, interval="1m"):
+def get_yahoo_finance_data(symbol, lookback=3600, interval="1m", offset=0):
     """
     reverse engineer http rest get request
     interval options: 1m, 15m, 60m or 1h
@@ -13,7 +13,7 @@ def get_yahoo_finance_data(symbol, lookback=3600, interval="1m"):
     }
 
     # Current time and 1 day ago in Unix timestamp
-    end = int(time.time())
+    end = int(time.time()) - offset
     start = end - lookback  # default lookback 1 hr
 
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"

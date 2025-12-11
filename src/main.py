@@ -1,6 +1,7 @@
 # src/main.py
-from time import sleep
-from typing import List, Dict
+import threading
+from time import sleep, time
+from typing import Any, List, Dict, Optional
 from anthropic.types import ContentBlock
 from src.util.bot import (
     message_queue,
@@ -11,13 +12,6 @@ from src.util.bot import (
 )
 from src.util.feed import get_yahoo_finance_data, parse_yahoo_data
 from src.util.plot import plot_recent_candlesticks
-from src.util.vibe import chat, build_msg
-from src.util.prompt import (
-    STAGE1_TREND_ANALYSIS,
-    STAGE2_LEVELS_ANALYSIS,
-    STAGE3_REVERSAL_WATCH,
-    generate_final_summary_prompt,
-)
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from rich.markdown import Markdown
@@ -31,552 +25,401 @@ import argparse
 
 console = Console()
 
-# Thresholds for information alerts (not trade signals)
-TREND_STRENGTH_ALERT_LEVEL = 70  # Alert when trend is particularly strong
-REVERSAL_ALERT_LEVEL = 60  # Alert when reversal signals are meaningful
-LEVEL_TEST_DISTANCE_PCT = 1.0  # Alert when within 1% of key level
 
-
-# Single analysis call
-def analyze_stage(prompt: str, charts: list[str] = [], context: str = "") -> str:
-    """Execute a single stage of analysis"""
-    if context:
-        full_prompt = f"{context}\n\n{prompt}"
-    else:
-        full_prompt = prompt
-
-    msg = build_msg([full_prompt], charts)
-    res = chat(msg)
-
-    return res[0].text
-
-
-# Multi-stage pipeline for a single analyst
-def pipeline_analyst(charts: list[str], analyst_id: int) -> Dict[str, str]:
+def std_alert(data, std=2.0):
     """
-    Run full 3-stage analysis pipeline for one analyst.
-    Returns dict with all stage outputs.
+    Args:
+        data: Pandas dataframe
+        std: Float
+    Returns:
+        dict containing signal
+
+    Makes a alert whenever the current
+    price (last row in df) reaches
+    the std threshold.
     """
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 1 - Trend Analysis[/dim]")
 
-    # STAGE 1: Trend Analysis
-    stage1_output = analyze_stage(STAGE1_TREND_ANALYSIS, charts)
+    window = min(20, len(data) - 1)
+    mean = data["Close"].iloc[:-1].tail(window).mean()
+    std_dev = data["Close"].iloc[:-1].tail(window).std()
 
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 2 - Key Levels Analysis[/dim]")
+    current_price = data["Close"].iloc[-1]
 
-    # STAGE 2: Key Levels Analysis (with Stage 1 context)
-    stage2_context = f"PREVIOUS ANALYSIS (Trend Characterization):\n{stage1_output}"
-    stage2_output = analyze_stage(STAGE2_LEVELS_ANALYSIS, charts, stage2_context)
+    if std_dev == 0:
+        return None
 
-    console.print(f"[dim]  → Analyst {analyst_id}: Stage 3 - Reversal Watch[/dim]")
+    deviation = (current_price - mean) / std_dev
 
-    # STAGE 3: Reversal Watch (with full context)
-    stage3_context = (
-        f"STAGE 1 - TREND:\n{stage1_output}\n\nSTAGE 2 - KEY LEVELS:\n{stage2_output}"
-    )
-    stage3_output = analyze_stage(STAGE3_REVERSAL_WATCH, charts, stage3_context)
+    # Output alert
+    if abs(deviation) >= std:
+        avg_volume = data["Volume"].iloc[:-1].tail(window).mean()
+        current_volume = data["Volume"].iloc[-1]
+        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1.0
 
-    return {
-        "analyst_id": analyst_id,
-        "stage1_trend": stage1_output,
-        "stage2_levels": stage2_output,
-        "stage3_reversal": stage3_output,
-    }
+        alert = {
+            "type": "MEAN_REVERSION",
+            "direction": "ABOVE" if deviation > 0 else "BELOW",
+            "current_price": current_price,
+            "mean": mean,
+            "std_dev": std_dev,
+            "deviation": deviation,
+            "threshold": std,
+            "volume_ratio": volume_ratio,
+            "timestamp": data.index[-1]
+            if hasattr(data.index[-1], "strftime")
+            else datetime.now(),
+        }
+
+        return alert
+    return None
 
 
-# Run multiple analysts in parallel
-def run_pack_pipeline(charts: list[str], num_analysts: int = 2):
+def calculate_roc(data, period=5):
     """
-    Run multiple analysts through the 3-stage pipeline concurrently.
-    Each analyst completes all 3 stages independently.
+    Calculate current rate of change.
+
+    Args:
+        data: Pandas dataframe
+        period: lookback period for ROC
+
+    Returns:
+        float: rate of change as decimal (0.01 = 1%)
     """
-    console.print(
-        f"[cyan]📊 Running {num_analysts} analysts through pipeline...[/cyan]"
-    )
+    if len(data) < period:
+        return 0
 
-    with ThreadPoolExecutor(max_workers=num_analysts) as executor:
-        futures = [
-            executor.submit(pipeline_analyst, charts, i + 1)
-            for i in range(num_analysts)
-        ]
+    current_price = data["Close"].iloc[-1]
+    past_price = data["Close"].iloc[-period]
 
-        results = [future.result() for future in futures]
+    if past_price == 0:
+        return 0
 
-    console.print(f"[green]✓ All analysts completed pipeline[/green]")
-    return results
+    return (current_price - past_price) / past_price
 
 
-# Fetch data and generate charts
-def ticker_scent(ticker: str):
-    """Fetch data and plot charts for analysis"""
-    charts = ["charts/tminus60.jpeg"]
-
-    # 1-hour chart (1-minute candles, last 1 hour)
-    tminus60 = parse_yahoo_data(
-        get_yahoo_finance_data(ticker, lookback=3600, interval="1m")
-    )
-    plot_recent_candlesticks(tminus60, last_n_periods=len(tminus60), filename=charts[0])
-
-    return charts
-
-
-def extract_trend_data(trend_text: str) -> Dict:
+def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0.3):
     """
-    Extract trend information from Stage 1 analysis.
-    Returns dict with direction, strength, quality, duration.
+    Args:
+        data: Pandas dataframe
+        threshold: Float
+        n_candles: Integer
+        decay_rate: Float
+    Returns:
+        dict containing signal
+
+    Makes an alert whenever the ratio
+    of bullish vs. bearish scores
+    break the threshold.
     """
-    data = {
-        "direction": "SIDEWAYS",
-        "strength": 0,
-        "quality": "Unknown",
-        "duration": 0,
-    }
 
-    # Extract trend direction
-    if re.search(r"Trend Direction[:\*\s]*Uptrend", trend_text, re.IGNORECASE):
-        data["direction"] = "UPTREND"
-    elif re.search(r"Trend Direction[:\*\s]*Downtrend", trend_text, re.IGNORECASE):
-        data["direction"] = "DOWNTREND"
-    elif re.search(r"Trend Direction[:\*\s]*Sideways", trend_text, re.IGNORECASE):
-        data["direction"] = "SIDEWAYS"
+    recent_data = data.tail(n_candles).copy()
 
-    # Extract trend strength
-    strength_match = re.search(
-        r"Total Score[:\*\s]*(\d{1,3})/100", trend_text, re.IGNORECASE
-    )
-    if strength_match:
-        data["strength"] = int(strength_match.group(1))
+    avg_volume = data["Volume"].mean()
+    if avg_volume == 0:
+        avg_volume = 1
 
-    # Extract quality
-    if re.search(r"Trend Quality[:\*\s]*Clean", trend_text, re.IGNORECASE):
-        data["quality"] = "Clean"
-    elif re.search(r"Trend Quality[:\*\s]*Choppy", trend_text, re.IGNORECASE):
-        data["quality"] = "Choppy"
-    elif re.search(r"Trend Quality[:\*\s]*Pausing", trend_text, re.IGNORECASE):
-        data["quality"] = "Pausing"
+    # Calculate score for upward
+    # and downward momentum based
+    # on price movement and volume
+    green_score = 0
+    red_score = 0
 
-    # Extract duration (number of candles)
-    duration_match = re.search(
-        r"(\d+)\s+candles in current trend", trend_text, re.IGNORECASE
-    )
-    if duration_match:
-        data["duration"] = int(duration_match.group(1))
+    roc_period = min(5, n_candles // 3)
 
-    return data
+    for i in range(len(recent_data)):
+        row = recent_data.iloc[i]
 
+        candles_back = len(recent_data) - 1 - i
+        time_weight = decay_rate**candles_back
 
-def extract_levels_data(levels_text: str) -> Dict:
-    """
-    Extract support/resistance levels from Stage 2 analysis.
-    Returns dict with support/resistance levels and probabilities.
-    """
-    data = {
-        "support_levels": [],
-        "resistance_levels": [],
-        "critical_level": None,
-    }
-
-    # Extract support levels
-    support_pattern = r"Support \d+:\s*\$?(\d+\.?\d*)\s*.*?Strength Rating:\s*(\d+)/100.*?Hold Probability:\s*(\d+)%"
-    for match in re.finditer(support_pattern, levels_text, re.IGNORECASE | re.DOTALL):
-        data["support_levels"].append(
-            {
-                "price": float(match.group(1)),
-                "strength": int(match.group(2)),
-                "hold_probability": int(match.group(3)),
-            }
+        price_move = abs(
+            (row["Close"] - row["Open"]) / row["Open"] if row["Open"] != 0 else 0
         )
 
-    # Extract resistance levels
-    resistance_pattern = r"Resistance \d+:\s*\$?(\d+\.?\d*)\s*.*?Strength Rating:\s*(\d+)/100.*?Hold Probability:\s*(\d+)%"
-    for match in re.finditer(
-        resistance_pattern, levels_text, re.IGNORECASE | re.DOTALL
-    ):
-        data["resistance_levels"].append(
-            {
-                "price": float(match.group(1)),
-                "strength": int(match.group(2)),
-                "hold_probability": int(match.group(3)),
-            }
+        volume_factor = row["Volume"] / avg_volume
+
+        # Calculate rate of change
+        # and add it to score
+        current_idx = recent_data.index[i]
+        data_position = data.index.get_loc(current_idx)
+
+        if data_position >= roc_period:
+            prev_close = data.iloc[data_position - roc_period]["Close"]
+            current_close = row["Close"]
+
+            roc = (
+                abs((current_close - prev_close) / prev_close) if prev_close != 0 else 0
+            )
+
+            roc_normalized = min(roc * 20, 1.0)
+
+        else:
+            roc_normalized = 0
+
+        base_score = (1 - roc_weight) * price_move + roc_weight * roc_normalized
+
+        candle_score = base_score * volume_factor * time_weight
+
+        # Accumulate scores by direction
+        if row["Close"] >= row["Open"]:
+            green_score += candle_score
+        else:
+            red_score += candle_score
+
+    total_score = green_score + red_score
+    if total_score == 0:
+        return None
+
+    green_ratio = green_score / total_score
+    red_ratio = red_score / total_score
+
+    recent_roc = calculate_roc(data.tail(roc_period * 2), roc_period)
+    trend_momentum = "ACCELERATING" if recent_roc > 0.01 else "STEADY"
+
+    # Make alerts
+    if green_ratio >= threshold:
+        alert = {
+            "type": "TREND",
+            "direction": "UPTREND",
+            "green_score": green_score * 100,
+            "red_score": red_score * 100,
+            "ratio": green_ratio,
+            "threshold": threshold,
+            "strength": "STRONG" if green_ratio >= 0.8 else "MODERATE",
+            "momentum": trend_momentum,
+            "roc": recent_roc * 100,  # As percentage
+            "n_candles": n_candles,
+            "timestamp": data.index[-1]
+            if hasattr(data.index[-1], "strftime")
+            else datetime.now(),
+        }
+        return alert
+
+    elif red_ratio >= threshold:
+        alert = {
+            "type": "TREND",
+            "direction": "DOWNTREND",
+            "green_score": green_score * 100,
+            "red_score": red_score * 100,
+            "ratio": red_ratio,
+            "threshold": threshold,
+            "strength": "STRONG" if red_ratio >= 0.88 else "MODERATE",
+            "momentum": trend_momentum,
+            "roc": recent_roc * 100,  # As percentage
+            "n_candles": n_candles,
+            "timestamp": data.index[-1]
+            if hasattr(data.index[-1], "strftime")
+            else datetime.now(),
+        }
+        return alert
+
+
+def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
+    """
+    Args:
+        data: Pandas dataframe
+        threshold: Float
+        n_candles: Integer
+    Returns:
+        dict containing signal
+
+    Makes an alert whenever the
+    current volume is greater than
+    the avg volume by a factor of
+    the threshold.
+    """
+
+    if len(data) < n_candles + 1:
+        return None
+
+    current_candle = data.iloc[-1]
+    current_volume = current_candle["Volume"]
+
+    previous_candles = data.iloc[-(n_candles + 1) : -1]
+    avg_volume = previous_candles["Volume"].mean()
+
+    if avg_volume == 0:
+        return None
+
+    volume_ratio = current_volume / avg_volume
+
+    if volume_ratio >= threshold:
+        recent_volumes = data["Volume"].tail(5).tolist()
+        is_accelerating = (
+            len(recent_volumes) >= 2 and recent_volumes[-1] > recent_volumes[-2]
         )
 
-    return data
+        alert = {
+            "type": "VOLUME_ANOMALY",
+            "current_volume": int(current_volume),
+            "avg_volume": int(avg_volume),
+            "volume_ratio": round(volume_ratio, 2),
+            "threshold": threshold,
+            "is_accelerating": is_accelerating,
+            "strength": "EXTREME" if volume_ratio >= threshold * 1.5 else "HIGH",
+            "n_candles": n_candles,
+            "timestamp": data.index[-1]
+            if hasattr(data.index[-1], "strftime")
+            else datetime.now(),
+        }
+        return alert
+
+    return None
 
 
-def extract_reversal_data(reversal_text: str) -> Dict:
+def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
     """
-    Extract reversal information from Stage 3 analysis.
-    Returns dict with reversal score and probability.
+    Args:
+        symbol: String
+        lookback: Integer
+        Interval: String
+        Offset: Integer
+    Returns:
+        Void
+
     """
-    data = {
-        "reversal_score": 0,
-        "reversal_probability": 0,
-        "warning_signs": [],
-    }
 
-    # Extract reversal score
-    score_match = re.search(
-        r"Reversal Score:\s*(\d{1,3})/100", reversal_text, re.IGNORECASE
-    )
-    if score_match:
-        data["reversal_score"] = int(score_match.group(1))
-
-    # Extract reversal probability
-    prob_match = re.search(
-        r"Reversal Probability:\s*(\d{1,3})%", reversal_text, re.IGNORECASE
-    )
-    if prob_match:
-        data["reversal_probability"] = int(prob_match.group(1))
-
-    return data
-
-
-# Aggregate analysis from multiple analysts
-def aggregate_analysis(analyst_results: List[Dict]) -> Dict:
-    """
-    Parse analysis from all analysts and create consensus view.
-    Returns aggregate statistics for informational purposes.
-    """
-    trend_data = []
-    levels_data = []
-    reversal_data = []
-
-    for result in analyst_results:
-        # Extract data from each stage
-        trend_info = extract_trend_data(result["stage1_trend"])
-        levels_info = extract_levels_data(result["stage2_levels"])
-        reversal_info = extract_reversal_data(result["stage3_reversal"])
-
-        trend_data.append(trend_info)
-        levels_data.append(levels_info)
-        reversal_data.append(reversal_info)
-
-    # Calculate trend consensus
-    directions = [t["direction"] for t in trend_data]
-    direction_counts = {d: directions.count(d) for d in set(directions)}
-    consensus_direction = max(direction_counts, key=direction_counts.get)
-    direction_agreement = direction_counts[consensus_direction] / len(directions)
-
-    avg_trend_strength = sum(t["strength"] for t in trend_data) / len(trend_data)
-
-    # Get most common quality
-    qualities = [t["quality"] for t in trend_data]
-    consensus_quality = max(set(qualities), key=qualities.count)
-
-    # Calculate levels consensus
-    all_supports = []
-    all_resistances = []
-    for levels in levels_data:
-        all_supports.extend(levels["support_levels"])
-        all_resistances.extend(levels["resistance_levels"])
-
-    # Find strongest support (closest to current price with highest strength)
-    strongest_support = None
-    if all_supports:
-        strongest_support = max(all_supports, key=lambda x: x["strength"])
-
-    # Find strongest resistance
-    strongest_resistance = None
-    if all_resistances:
-        strongest_resistance = max(all_resistances, key=lambda x: x["strength"])
-
-    # Calculate reversal consensus
-    avg_reversal_score = sum(r["reversal_score"] for r in reversal_data) / len(
-        reversal_data
-    )
-    avg_reversal_prob = sum(r["reversal_probability"] for r in reversal_data) / len(
-        reversal_data
-    )
-
-    return {
-        "trend_consensus": {
-            "direction": consensus_direction,
-            "direction_agreement": direction_agreement * 100,
-            "avg_strength": avg_trend_strength,
-            "quality": consensus_quality,
-        },
-        "levels_consensus": {
-            "strongest_support": strongest_support["price"] if strongest_support else 0,
-            "support_strength": strongest_support["strength"]
-            if strongest_support
-            else 0,
-            "support_hold_prob": strongest_support["hold_probability"]
-            if strongest_support
-            else 0,
-            "strongest_resistance": strongest_resistance["price"]
-            if strongest_resistance
-            else 0,
-            "resistance_strength": strongest_resistance["strength"]
-            if strongest_resistance
-            else 0,
-            "resistance_hold_prob": strongest_resistance["hold_probability"]
-            if strongest_resistance
-            else 0,
-            "current_price": 0,  # Will be filled in with actual current price
-        },
-        "reversal_consensus": {
-            "avg_score": avg_reversal_score,
-            "avg_probability": avg_reversal_prob,
-        },
-        "raw_data": {
-            "trend_data": trend_data,
-            "levels_data": levels_data,
-            "reversal_data": reversal_data,
-        },
-    }
-
-
-# Generate final informational summary
-def generate_final_summary(
-    aggregate: Dict, analyst_results: List[Dict], current_price: float
-) -> str:
-    """
-    Create final informational summary without trade recommendations.
-    """
-    # Update current price in aggregate
-    aggregate["levels_consensus"]["current_price"] = current_price
-
-    # Build context from all analysts
-    analyst_summaries = []
-    for result in analyst_results:
-        summary = (
-            f"**Analyst {result['analyst_id']}:**\n\n"
-            f"Trend: {result['stage1_trend']}\n\n"
-            f"Levels: {result['stage2_levels']}\n\n"
-            f"Reversal: {result['stage3_reversal']}\n"
-        )
-        analyst_summaries.append(summary)
-
-    summary_prompt = generate_final_summary_prompt(
-        trend_consensus=aggregate["trend_consensus"],
-        levels_consensus=aggregate["levels_consensus"],
-        reversal_consensus=aggregate["reversal_consensus"],
-        analyst_summaries="\n---\n".join(analyst_summaries),
-    )
-
-    msg = build_msg([summary_prompt], [])
-    final_output = chat(msg)[0].text
-
-    return final_output
-
-
-def generate_information_alerts(aggregate: Dict, current_price: float) -> List[str]:
-    """
-    Generate information alerts based on market conditions.
-    These are NOT trade signals, but important market state notifications.
-    """
-    alerts = []
-
-    trend = aggregate["trend_consensus"]
-    levels = aggregate["levels_consensus"]
-    reversal = aggregate["reversal_consensus"]
-
-    # Alert 1: Strong trend detected
-    if trend["avg_strength"] >= TREND_STRENGTH_ALERT_LEVEL:
-        alerts.append(
-            f"📊 Strong {trend['direction']} detected ({trend['avg_strength']:.0f}/100 strength)"
-        )
-
-    # Alert 2: Approaching key level
-    support_price = levels["strongest_support"]
-    resistance_price = levels["strongest_resistance"]
-
-    if support_price > 0:
-        distance_to_support_pct = abs(
-            (current_price - support_price) / current_price * 100
-        )
-        if distance_to_support_pct <= LEVEL_TEST_DISTANCE_PCT:
-            alerts.append(
-                f"⚠️  Approaching key support at ${support_price:.2f} "
-                f"({levels['support_hold_prob']:.0f}% hold probability)"
-            )
-
-    if resistance_price > 0:
-        distance_to_resistance_pct = abs(
-            (resistance_price - current_price) / current_price * 100
-        )
-        if distance_to_resistance_pct <= LEVEL_TEST_DISTANCE_PCT:
-            alerts.append(
-                f"⚠️  Approaching key resistance at ${resistance_price:.2f} "
-                f"({levels['resistance_hold_prob']:.0f}% hold probability)"
-            )
-
-    # Alert 3: Reversal signals
-    if reversal["avg_score"] >= REVERSAL_ALERT_LEVEL:
-        alerts.append(
-            f"🔄 Reversal signals present (Score: {reversal['avg_score']:.0f}/100, "
-            f"Probability: {reversal['avg_probability']:.0f}%)"
-        )
-
-    return alerts
-
-
-# Main monitoring loop
-def pack_hunt(stop_event: Event):
-    """Continuous loop running informational analysis"""
-    while not stop_event.is_set():
-        try:
-            current_time = datetime.now().strftime("%H:%M:%S")
-            console.print(
-                f"\n[bold cyan]═══ Analysis Cycle: {current_time} ═══[/bold cyan]"
-            )
-
-            # 1. Fetch data and generate charts
-            console.print("[cyan]📈 Fetching market data...[/cyan]")
-            charts = ticker_scent("QQQ")
-
-            # Get current price
-            current_data = parse_yahoo_data(
-                get_yahoo_finance_data("QQQ", lookback=3600, interval="1m")
-            )
-            current_price = (
-                float(current_data.iloc[-1]["Close"]) if len(current_data) > 0 else 0
-            )
-
-            # 2. Run 2 analysts through full pipeline
-            analyst_results = run_pack_pipeline(charts, num_analysts=2)
-
-            # 3. Aggregate analysis
-            console.print("[cyan]🧮 Aggregating analysis...[/cyan]")
-            aggregate = aggregate_analysis(analyst_results)
-
-            # Display aggregate stats
-            console.print(
-                f"[yellow]Trend: {aggregate['trend_consensus']['direction']} "
-                f"(Strength: {aggregate['trend_consensus']['avg_strength']:.0f}/100, "
-                f"Quality: {aggregate['trend_consensus']['quality']})[/yellow]"
-            )
-            console.print(
-                f"[yellow]Reversal Watch: {aggregate['reversal_consensus']['avg_score']:.0f}/100 score, "
-                f"{aggregate['reversal_consensus']['avg_probability']:.0f}% probability[/yellow]"
-            )
-
-            # 4. Generate information alerts
-            alerts = generate_information_alerts(aggregate, current_price)
-
-            if alerts:
-                console.print(f"[bold yellow]📢 Information Alerts:[/bold yellow]")
-                for alert in alerts:
-                    console.print(f"[yellow]  • {alert}[/yellow]")
-                    message_queue.put(alert)
-
-            # 5. Generate and display final summary
-            console.print("[cyan]📝 Generating market summary...[/cyan]")
-            final_summary = generate_final_summary(
-                aggregate, analyst_results, current_price
-            )
-
-            console.print(f"\n[bold green]═══ Market Summary ═══[/bold green]")
-            console.print(Markdown(final_summary))
-
-            # Send summary to bot
-            message_queue.put(f"\n{final_summary}")
-
-            # Wait before next cycle
-            stop_event.wait(timeout=170)  # ~3 minutes between analyses
-
-        except Exception as e:
-            console.print(f"[red]✗ Error in analysis cycle: {e}[/red]")
-            console.print(f"[red]{type(e).__name__}: {str(e)}[/red]")
-            stop_event.wait(timeout=60)
-
-
-def on_hunt_complete(_: Future):
-    """Callback when pack_hunt completes"""
     try:
-        console.print("\n[bold green]═══ ANALYSIS PERIOD ENDED ═══[/bold green]")
+        data = parse_yahoo_data(
+            get_yahoo_finance_data("QQQ", lookback=3600, interval="1m", offset=28600)
+        )
+
+        plot_recent_candlesticks(data, filename="charts/tminus60.jpeg")
+
+        # Check for alerts
+        std_signal = std_alert(data, std=1.9)
+        trend_signal = trend_alert(
+            data, threshold=0.65, n_candles=13, decay_rate=0.8, roc_weight=0.5
+        )
+        volume_signal = volume_anomaly_alert(data, threshold=2.1, n_candles=10)
+
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now(),
+            "std_signal": std_signal,
+            "trend_signal": trend_signal,
+            "volume_signal": volume_signal,
+            "data": data,  # Include data in case you need it
+        }
+
     except Exception as e:
-        console.print(f"[red]✗ Analysis failed: {e}[/red]")
+        console.print(f"[red]Error checking alerts: {e}[/red]")
+        return None
 
 
-async def main():
-    console.print("[bold cyan]🚀 Market Information System Starting...[/bold cyan]")
-    console.print("[dim]Press Ctrl+C to exit[/dim]\n")
+def display_alerts(alerts: Optional[Dict[Any, Any]]):
+    if alerts is None:
+        return
 
-    bot_task = asyncio.create_task(start_bot())
+    std_signal = alerts.get("std_signal")
+    trend_signal = alerts.get("trend_signal")
+    volume_signal = alerts.get("volume_signal")
+    if std_signal:
+        console.print("\n[bold red]🔔 MEAN REVERSION ALERT![/bold red]")
+        console.print(
+            f"[dim]Time: {std_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+        )
+        console.print(f"Direction: {std_signal['direction']}")
+        console.print(f"Current Price: ${std_signal['current_price']:.2f}")
+        console.print(f"Mean: ${std_signal['mean']:.2f}")
+        console.print(f"Deviation: {std_signal['deviation']:.2f} standard deviations")
+        console.print(f"Volume Ratio: {std_signal['volume_ratio']:.2f}x average")
 
-    while not is_bot_ready():
-        await asyncio.sleep(0.5)
+    if trend_signal:
+        console.print("\n[bold green]🔔 TREND ALERT![/bold green]")
+        console.print(
+            f"[dim]Time: {trend_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+        )
+        console.print(f"Direction: {trend_signal['direction']}")
+        console.print(f"Strength: {trend_signal['strength']}")
+        console.print(
+            f"Momentum: {trend_signal['momentum']} ({trend_signal['roc']:+.2f}%)"
+        )
+        console.print(f"Ratio: {trend_signal['ratio']:.2%}")
+        console.print(f"Green Score: {trend_signal['green_score']:.2f}")
+        console.print(f"Red Score: {trend_signal['red_score']:.2f}")
 
-    messenger_task = asyncio.create_task(messenger())
+    if volume_signal:
+        console.print("\n[bold yellow]🔔 VOLUME SPIKE ALERT![/bold yellow]")
+        console.print(
+            f"[dim]Time: {volume_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+        )
+        console.print(f"Current Volume: {volume_signal['current_volume']:,}")
+        console.print(f"Average Volume: {volume_signal['avg_volume']:,}")
+        console.print(
+            f"Ratio: {volume_signal['volume_ratio']}x (threshold: {volume_signal['threshold']}x)"
+        )
+        console.print(f"Strength: {volume_signal['strength']}")
+        if volume_signal["is_accelerating"]:
+            console.print("[red]⚠️  Volume is ACCELERATING![/red]")
 
+
+def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
+    """
+    Continuously monitor for alerts in a loop.
+
+    Args:
+        symbol: Stock ticker to monitor
+        interval_seconds: How often to check (in seconds)
+        stop_event: threading.Event to signal when to stop
+    """
+    console.print(f"[green]Starting alert monitor for {symbol}...[/green]")
+
+    while True:
+        # Check if main loop has
+        # terminated
+        if stop_event and stop_event.is_set():
+            console.print("[yellow]Alert monitor stopped.[/yellow]")
+            break
+
+        alerts = check_alerts(symbol=symbol)
+
+        if alerts:
+            display_alerts(alerts)
+
+        sleep(interval_seconds)
+
+
+def start_alert_monitor_thread(symbol="QQQ", interval_seconds=60):
+    """
+    Start the alert monitor in a background thread.
+
+    Args:
+        symbol: Stock ticker to monitor
+        interval_seconds: How often to check
+
+    Returns:
+        tuple: (thread, stop_event) - use stop_event.set() to stop the thread
+    """
     stop_event = Event()
-    executor = ThreadPoolExecutor(max_workers=1)
 
-    try:
-        hunt_future = executor.submit(pack_hunt, stop_event)
-        hunt_future.add_done_callback(on_hunt_complete)
+    monitor_thread = threading.Thread(
+        target=alert_monitor_loop,
+        args=(symbol, interval_seconds, stop_event),
+        daemon=True,  # Thread will close when main program exits
+    )
 
-        while not stop_event.is_set():
-            if hunt_future.done():
-                console.print("[yellow]Analysis worker stopped[/yellow]")
-                break
+    monitor_thread.start()
 
-            await asyncio.sleep(5)
-
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        console.print("\n[yellow]⚠️  Shutting down gracefully...[/yellow]")
-
-    finally:
-        console.print("[dim]Starting cleanup...[/dim]")
-
-        stop_event.set()
-        executor.shutdown(wait=True)
-        console.print("[dim]✓ Executor shut down[/dim]")
-
-        messenger_task.cancel()
-        try:
-            await messenger_task
-        except asyncio.CancelledError:
-            console.print("[dim]✓ Messenger cancelled[/dim]")
-
-        bot_task.cancel()
-        try:
-            await bot_task
-        except asyncio.CancelledError:
-            console.print("[dim]✓ Bot task cancelled[/dim]")
-
-        try:
-            await stop_bot()
-            console.print("[dim]✓ Bot stopped[/dim]")
-        except Exception as e:
-            console.print(f"[yellow]⚠️  Error stopping bot: {e}[/yellow]")
-
-        console.print("[bold green]✓ Shutdown complete[/bold green]")
+    return monitor_thread, stop_event
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Market Information System")
+    console.print("Bells coming online...")
 
-    parser.add_argument(
-        "-ts",
-        "--trend-strength",
-        type=float,
-        help="Alert threshold for trend strength (0-100, default 70)",
-        default=70,
-    )
-    parser.add_argument(
-        "-rs",
-        "--reversal-score",
-        type=float,
-        help="Alert threshold for reversal score (0-100, default 60)",
-        default=60,
-    )
-    parser.add_argument(
-        "-ld",
-        "--level-distance",
-        type=float,
-        help="Alert when within X%% of key level (default 1.0)",
-        default=1.0,
+    monitor_thread, stop_event = start_alert_monitor_thread(
+        symbol="QQQ", interval_seconds=60
     )
 
-    args = parser.parse_args()
-
-    TREND_STRENGTH_ALERT_LEVEL = args.trend_strength
-    REVERSAL_ALERT_LEVEL = args.reversal_score
-    LEVEL_TEST_DISTANCE_PCT = args.level_distance
+    console.print("[green]Alert monitor running in background thread.[/green]")
+    console.print("[dim]Press Ctrl+C to stop...[/dim]")
 
     try:
-        asyncio.run(main())
+        while True:
+            sleep(0.1)
+
     except KeyboardInterrupt:
-        pass
+        console.print("\n[yellow]Shutting down...[/yellow]")
+        stop_event.set()
+        monitor_thread.join(timeout=2)  # Wait up to 2 seconds for thread to finish
+        console.print("[green]✓ Clean shutdown complete.[/green]")
