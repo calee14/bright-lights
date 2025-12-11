@@ -146,18 +146,35 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
             prev_close = data.iloc[data_position - roc_period]["Close"]
             current_close = row["Close"]
 
-            roc = (
+            roc_raw = (
                 abs((current_close - prev_close) / prev_close) if prev_close != 0 else 0
             )
 
-            roc_normalized = min(roc * 20, 1.0)
+            roc_normalized = max(min(roc_raw * 100, 1.0), -1.0)
+
+            is_green_candle = row["Close"] >= row["Open"]
+
+            if is_green_candle:
+                # Green candle: boost for ROC > 0
+                # and penalize for ROC < 0
+                if roc_normalized > 0:
+                    roc_multiplier = 1.0 + (roc_normalized * roc_weight)
+                else:
+                    roc_multiplier = 1.0 + (
+                        roc_normalized * roc_weight
+                    )  # Will be < 1.0
+            else:
+                # Red candle: boost for ROC < 0
+                # and penalize for ROC > 0
+                if roc_normalized < 0:
+                    roc_multiplier = 1.0 + (abs(roc_normalized) * roc_weight)
+                else:
+                    roc_multiplier = 1.0 - (roc_normalized * roc_weight)
 
         else:
-            roc_normalized = 0
+            roc_multiplier = 1.0
 
-        base_score = (1 - roc_weight) * price_move + roc_weight * roc_normalized
-
-        candle_score = base_score * volume_factor * time_weight
+        candle_score = price_move * volume_factor * time_weight * roc_multiplier
 
         # Accumulate scores by direction
         if row["Close"] >= row["Open"]:
