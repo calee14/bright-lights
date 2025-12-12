@@ -190,7 +190,7 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
             "red_score": red_score * 100,
             "ratio": green_ratio,
             "threshold": threshold,
-            "strength": "STRONG" if green_ratio >= 0.8 else "MODERATE",
+            "strength": "STRONG" if green_ratio >= 0.9 else "MODERATE",
             "momentum": trend_momentum,
             "roc": recent_roc * 100,  # As percentage
             "n_candles": n_candles,
@@ -233,46 +233,83 @@ def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
     Returns:
         dict containing signal
     """
-
-    if len(data) < n_candles + 1:
+    if len(data) < n_candles * 2:
         return None
 
-    current_candle = data.iloc[-1]
-    current_volume = current_candle["Volume"]
+    recent_candles = data.tail(n_candles)
+    recent_avg_volume = recent_candles["Volume"].mean()
 
-    previous_candles = data.iloc[-(n_candles + 1) : -1]
-    avg_volume = previous_candles["Volume"].mean()
+    historical_candles = data.iloc[-(n_candles * 2) : -n_candles]
+    historical_avg_volume = historical_candles["Volume"].mean()
 
-    if avg_volume == 0:
+    if historical_avg_volume == 0:
         return None
 
-    volume_ratio = current_volume / avg_volume
+    volume_ratio = recent_avg_volume / historical_avg_volume
 
     if volume_ratio >= threshold:
-        recent_volumes = data["Volume"].tail(5).tolist()
-        is_accelerating = (
-            len(recent_volumes) >= 2 and recent_volumes[-1] > recent_volumes[-2]
-        )
+        volume_direction = "INCREASING"
+    elif volume_ratio <= (1 / threshold):
+        volume_direction = "DECREASING"
+    else:
+        return None
 
-        alert = {
-            "type": "VOLUME_ANOMALY",
-            "current_volume": int(current_volume),
-            "avg_volume": int(avg_volume),
-            "volume_ratio": round(volume_ratio, 2),
-            "threshold": threshold,
-            "is_accelerating": is_accelerating,
-            "strength": "EXTREME" if volume_ratio >= threshold * 1.5 else "HIGH",
-            "n_candles": n_candles,
-            "timestamp": data.index[-1]
-            if hasattr(data.index[-1], "strftime")
-            else datetime.now(),
-        }
-        return alert
+    recent_price_change = (
+        (recent_candles["Close"].iloc[-1] - recent_candles["Close"].iloc[0])
+        / recent_candles["Close"].iloc[0]
+    ) * 100
 
-    return None
+    green_candles = sum(recent_candles["Close"] >= recent_candles["Open"])
+    red_candles = n_candles - green_candles
+    price_bias = "BULLISH" if green_candles > red_candles else "BEARISH"
+
+    # Determine signal interpretation
+    if volume_direction == "INCREASING" and price_bias == "BULLISH":
+        interpretation = "STRONG_UPTREND"
+        confidence = "HIGH"
+    elif volume_direction == "INCREASING" and price_bias == "BEARISH":
+        interpretation = "STRONG_DOWNTREND"
+        confidence = "HIGH"
+    elif volume_direction == "DECREASING" and price_bias == "BULLISH":
+        interpretation = "UPTREND_WEAKENING"
+        confidence = "MEDIUM"
+    elif volume_direction == "DECREASING" and price_bias == "BEARISH":
+        interpretation = "DOWNTREND_WEAKENING"
+        confidence = "MEDIUM"
+    else:
+        interpretation = "UNCLEAR"
+        confidence = "LOW"
+
+    # Check if volume is accelerating within recent period
+    first_half_volume = recent_candles["Volume"].iloc[: n_candles // 2].mean()
+    second_half_volume = recent_candles["Volume"].iloc[n_candles // 2 :].mean()
+    is_accelerating = second_half_volume > first_half_volume * 1.1  # 10% increase
+
+    alert = {
+        "type": "VOLUME_TREND",
+        "volume_direction": volume_direction,
+        "price_bias": price_bias,
+        "interpretation": interpretation,
+        "confidence": confidence,
+        "recent_avg_volume": int(recent_avg_volume),
+        "historical_avg_volume": int(historical_avg_volume),
+        "volume_ratio": round(volume_ratio, 2),
+        "threshold": threshold,
+        "price_change_pct": round(recent_price_change, 2),
+        "green_candles": green_candles,
+        "red_candles": red_candles,
+        "is_accelerating": is_accelerating,
+        "recent_period": n_candles,
+        "comparison_period": n_candles,
+        "timestamp": data.index[-1]
+        if hasattr(data.index[-1], "strftime")
+        else datetime.now(),
+    }
+
+    return alert
 
 
-def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
+def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=29000):
     """
     Args:
         symbol: String
@@ -286,7 +323,9 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
 
     try:
         data = parse_yahoo_data(
-            get_yahoo_finance_data("QQQ", lookback=3600, interval="1m", offset=0)
+            get_yahoo_finance_data(
+                "QQQ", lookback=lookback, interval=interval, offset=offset
+            )
         )
 
         plot_recent_candlesticks(data, filename="charts/tminus60.jpeg")
@@ -294,9 +333,9 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.65, n_candles=13, decay_rate=0.9, roc_weight=0.5
+            data, threshold=0.8, n_candles=13, decay_rate=0.9, roc_weight=0.5
         )
-        volume_signal = volume_anomaly_alert(data, threshold=2.1, n_candles=10)
+        volume_signal = volume_anomaly_alert(data, threshold=1.7, n_candles=6)
 
         return {
             "symbol": symbol,
@@ -374,33 +413,59 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         message_queue.put(discord_msg)
 
     if volume_signal:
-        console.print("\n[bold yellow]🔔 VOLUME SPIKE ALERT![/bold yellow]")
+        console.print("\n[bold yellow]🔔 VOLUME TREND ALERT![/bold yellow]")
         console.print(
             f"[dim]Time: {volume_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
         )
-        console.print(f"Current Volume: {volume_signal['current_volume']:,}")
-        console.print(f"Average Volume: {volume_signal['avg_volume']:,}")
+        console.print(f"Volume Direction: {volume_signal['volume_direction']}")
+        console.print(f"Price Bias: {volume_signal['price_bias']}")
+        console.print(f"Interpretation: [bold]{volume_signal['interpretation']}[/bold]")
+        console.print(f"Confidence: {volume_signal['confidence']}")
         console.print(
-            f"Ratio: {volume_signal['volume_ratio']}x (threshold: {volume_signal['threshold']}x)"
+            f"Volume Ratio: {volume_signal['volume_ratio']}x (Recent vs Historical)"
         )
-        console.print(f"Strength: {volume_signal['strength']}")
+        console.print(f"Price Change: {volume_signal['price_change_pct']:+.2f}%")
+        console.print(
+            f"Candle Mix: {volume_signal['green_candles']} green / {volume_signal['red_candles']} red"
+        )
+
         if volume_signal["is_accelerating"]:
-            console.print("[red]⚠️  Volume is ACCELERATING![/red]")
+            console.print("[bold yellow]⚡ Volume is ACCELERATING![/bold yellow]")
+
+        # Actionable interpretation
+        action_text = ""
+        if volume_signal["interpretation"] == "STRONG_UPTREND":
+            action_msg = "💡 Consider LONG positions or hold longs"
+            console.print(f"[green]{action_msg}[/green]")
+            action_text = f"\n{action_msg}"
+        elif volume_signal["interpretation"] == "STRONG_DOWNTREND":
+            action_msg = "💡 Consider SHORT positions or exit longs"
+            console.print(f"[red]{action_msg}[/red]")
+            action_text = f"\n{action_msg}"
+        elif volume_signal["interpretation"] == "UPTREND_WEAKENING":
+            action_msg = "💡 Consider taking profits on longs"
+            console.print(f"[yellow]{action_msg}[/yellow]")
+            action_text = f"\n{action_msg}"
+        elif volume_signal["interpretation"] == "DOWNTREND_WEAKENING":
+            action_msg = "💡 Consider reducing shorts"
+            console.print(f"[yellow]{action_msg}[/yellow]")
+            action_text = f"\n{action_msg}"
 
         # Send to Discord
         accelerating_text = ""
         if volume_signal["is_accelerating"]:
-            console.print("[red]⚠️  Volume is ACCELERATING![/red]")
-            accelerating_text = "\n⚠️ Volume is ACCELERATING!"
+            accelerating_text = "\n⚡ Volume is ACCELERATING!"
 
         discord_msg = (
-            f"🔔 **VOLUME SPIKE ALERT!**\n"
+            f"🔔 **VOLUME TREND ALERT!**\n"
             f"Time: {volume_signal['timestamp'].strftime('%H:%M:%S')}\n"
-            f"Current Volume: {volume_signal['current_volume']:,}\n"
-            f"Average Volume: {volume_signal['avg_volume']:,}\n"
-            f"Ratio: {volume_signal['volume_ratio']}x (threshold: {volume_signal['threshold']}x)\n"
-            f"Strength: {volume_signal['strength']}"
+            f"Direction: {volume_signal['volume_direction']} | Price: {volume_signal['price_bias']}\n"
+            f"**{volume_signal['interpretation']}** (Confidence: {volume_signal['confidence']})\n"
+            f"Volume Ratio: {volume_signal['volume_ratio']}x\n"
+            f"Price Change: {volume_signal['price_change_pct']:+.2f}%\n"
+            f"Candles: {volume_signal['green_candles']}G / {volume_signal['red_candles']}R"
             f"{accelerating_text}"
+            f"{action_text}"
         )
         message_queue.put(discord_msg)
 
