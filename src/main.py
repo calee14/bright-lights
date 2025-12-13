@@ -260,11 +260,20 @@ def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
         / recent_candles["Close"].iloc[0]
     ) * 100
 
-    green_candles = sum(recent_candles["Close"] >= recent_candles["Open"])
-    red_candles = n_candles - green_candles
-    price_bias = "BULLISH" if green_candles > red_candles else "BEARISH"
+    recent_price_start = recent_candles["Close"].iloc[0]
+    recent_price_end = recent_candles["Close"].iloc[-1]
+    recent_price_change_pct = (
+        (recent_price_end - recent_price_start) / recent_price_start
+    ) * 100
 
-    # Determine signal interpretation
+    # Determine price bias based on ROC
+    if recent_price_change_pct > 0.1:
+        price_bias = "BULLISH"
+    elif recent_price_change_pct < -0.1:
+        price_bias = "BEARISH"
+    else:
+        price_bias = "NEUTRAL"
+
     if volume_direction == "INCREASING" and price_bias == "BULLISH":
         interpretation = "STRONG_UPTREND"
         confidence = "HIGH"
@@ -297,8 +306,6 @@ def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
         "volume_ratio": round(volume_ratio, 2),
         "threshold": threshold,
         "price_change_pct": round(recent_price_change, 2),
-        "green_candles": green_candles,
-        "red_candles": red_candles,
         "is_accelerating": is_accelerating,
         "recent_period": n_candles,
         "comparison_period": n_candles,
@@ -334,7 +341,7 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.8, n_candles=13, decay_rate=0.9, roc_weight=0.5
+            data, threshold=0.73, n_candles=13, decay_rate=0.9, roc_weight=0.5
         )
         volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=6)
 
