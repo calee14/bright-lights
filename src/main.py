@@ -243,26 +243,6 @@ def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
     historical_candles = data.iloc[-(n_candles * 2) : -n_candles]
     historical_avg_volume = historical_candles["Volume"].mean()
 
-    # Cap recent volumes at mean ± 2 std
-    recent_volumes = recent_candles["Volume"].values
-    recent_mean = recent_volumes.mean()
-    recent_std = recent_volumes.std()
-    recent_upper_cap = recent_mean + (0.5 * recent_std)
-    recent_lower_cap = max(recent_mean - (0.5 * recent_std), 0)
-    recent_volumes_capped = np.clip(recent_volumes, recent_lower_cap, recent_upper_cap)
-    recent_avg_volume = recent_volumes_capped.mean()
-
-    # Cap historical volumes at mean ± 2 std
-    historical_volumes = historical_candles["Volume"].values
-    historical_mean = historical_volumes.mean()
-    historical_std = historical_volumes.std()
-    historical_upper_cap = historical_mean + (0.5 * historical_std)
-    historical_lower_cap = max(historical_mean - (0.5 * historical_std), 0)
-    historical_volumes_capped = np.clip(
-        historical_volumes, historical_lower_cap, historical_upper_cap
-    )
-    historical_avg_volume = historical_volumes_capped.mean()
-
     if historical_avg_volume == 0:
         return None
 
@@ -356,7 +336,7 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         trend_signal = trend_alert(
             data, threshold=0.8, n_candles=13, decay_rate=0.9, roc_weight=0.5
         )
-        volume_signal = volume_anomaly_alert(data, threshold=1.7, n_candles=6)
+        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=6)
 
         return {
             "symbol": symbol,
@@ -550,7 +530,7 @@ async def main():
         await asyncio.sleep(0.2)
 
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="QQQ", interval_seconds=99
+        symbol="QQQ", interval_seconds=79
     )
 
     console.print("[green]Alert monitor running in background thread.[/green]")
