@@ -433,9 +433,6 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
             f"Volume Ratio: {volume_signal['volume_ratio']}x (Recent vs Historical)"
         )
         console.print(f"Price Change: {volume_signal['price_change_pct']:+.2f}%")
-        console.print(
-            f"Candle Mix: {volume_signal['green_candles']} green / {volume_signal['red_candles']} red"
-        )
 
         if volume_signal["is_accelerating"]:
             console.print("[bold yellow]⚡ Volume is ACCELERATING![/bold yellow]")
@@ -471,7 +468,6 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
             f"**{volume_signal['interpretation']}** (Confidence: {volume_signal['confidence']})\n"
             f"Volume Ratio: {volume_signal['volume_ratio']}x\n"
             f"Price Change: {volume_signal['price_change_pct']:+.2f}%\n"
-            f"Candles: {volume_signal['green_candles']}G / {volume_signal['red_candles']}R"
             f"{accelerating_text}"
             f"{action_text}"
         )
