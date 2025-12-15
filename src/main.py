@@ -39,7 +39,7 @@ def std_alert(data, std=2.0):
         dict containing signal
     """
 
-    window = min(20, len(data) - 1)
+    window = min(10, len(data) - 1)
     mean = data["Close"].iloc[:-1].tail(window).mean()
     std_dev = data["Close"].iloc[:-1].tail(window).std()
 
@@ -97,7 +97,7 @@ def calculate_roc(data, period=5):
     return (current_price - past_price) / past_price
 
 
-def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0.3):
+def trend_alert(data, threshold=0.7, n_candles=7, decay_rate=0.98, roc_weight=0.3):
     """
     Makes an alert whenever the ratio
     of bullish vs. bearish scores
@@ -220,7 +220,7 @@ def trend_alert(data, threshold=0.7, n_candles=20, decay_rate=0.98, roc_weight=0
         return alert
 
 
-def volume_anomaly_alert(data, threshold=2.1, n_candles=10):
+def volume_anomaly_alert(data, threshold=2.1, n_candles=5):
     """
     Makes an alert whenever the
     current volume is greater than
@@ -341,9 +341,9 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.73, n_candles=13, decay_rate=0.9, roc_weight=0.5
+            data, threshold=0.73, n_candles=7, decay_rate=0.9, roc_weight=0.5
         )
-        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=6)
+        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=3)
 
         return {
             "symbol": symbol,
@@ -492,7 +492,7 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol)
+        alerts = check_alerts(symbol=symbol, interval="3m")
 
         if alerts:
             display_alerts(alerts)
@@ -533,7 +533,7 @@ async def main():
         await asyncio.sleep(0.2)
 
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="QQQ", interval_seconds=79
+        symbol="QQQ", interval_seconds=91
     )
 
     console.print("[green]Alert monitor running in background thread.[/green]")
