@@ -260,6 +260,160 @@ def trend_alert(
         return alert
 
 
+def price_range_test_alert(data, range_pct=0.5, min_tests=3, lookback=20):
+    """
+    Detects when price is repeatedly testing a specific range,
+    indicating potential support/resistance and imminent breakout.
+
+    Args:
+        data: Pandas dataframe
+        range_pct: Percentage range to consider as same level (e.g., 0.5 = 0.5%)
+        min_tests: Minimum number of tests required to trigger alert
+        lookback: Number of candles to look back
+    Returns:
+        dict containing signal or None
+    """
+
+    recent_data = data.tail(lookback)
+    current_price = data["Close"].iloc[-1]
+
+    test_points = []
+
+    for i in range(len(recent_data)):
+        row = recent_data.iloc[i]
+        test_points.append(
+            {
+                "price": row["High"],
+                "type": "HIGH",
+                "candle_idx": i,
+                "volume": row["Volume"],
+            }
+        )
+        test_points.append(
+            {
+                "price": row["Low"],
+                "type": "LOW",
+                "candle_idx": i,
+                "volume": row["Volume"],
+            }
+        )
+
+    # Find clusters of tests within range_pct
+    def find_clusters(points, tolerance_pct):
+        clusters = []
+        used = set()
+
+        for i, point in enumerate(points):
+            if i in used:
+                continue
+
+            cluster = [point]
+            used.add(i)
+            base_price = point["price"]
+
+            for j, other in enumerate(points):
+                if j in used or j == i:
+                    continue
+
+                price_diff_pct = abs(other["price"] - base_price) / base_price * 100
+
+                if price_diff_pct <= tolerance_pct:
+                    cluster.append(other)
+                    used.add(j)
+
+            if len(cluster) >= min_tests:
+                avg_price = sum(p["price"] for p in cluster) / len(cluster)
+                avg_volume = sum(p["volume"] for p in cluster) / len(cluster)
+
+                # Determine if resistance or support
+                level_type = (
+                    "RESISTANCE"
+                    if all(p["type"] == "HIGH" for p in cluster[:3])
+                    else "SUPPORT"
+                    if all(p["type"] == "LOW" for p in cluster[:3])
+                    else "MIXED"
+                )
+
+                clusters.append(
+                    {
+                        "avg_price": avg_price,
+                        "num_tests": len(cluster),
+                        "type": level_type,
+                        "avg_volume": avg_volume,
+                        "cluster": cluster,
+                    }
+                )
+
+        return clusters
+
+    clusters = find_clusters(test_points, range_pct)
+
+    if not clusters:
+        return None
+
+    # Find the most relevant cluster
+    # (closest to current price with most tests)
+    clusters_with_score = []
+    for cluster in clusters:
+        distance_pct = abs(cluster["avg_price"] - current_price) / current_price * 100
+        # Score: prioritize proximity and number of tests
+        score = cluster["num_tests"] * 10 - distance_pct
+        clusters_with_score.append((score, cluster))
+
+    clusters_with_score.sort(reverse=True, key=lambda x: x[0])
+    best_cluster = clusters_with_score[0][1]
+
+    # Only alert if current price
+    # is near the tested level
+    distance_pct = abs(best_cluster["avg_price"] - current_price) / current_price * 100
+
+    if distance_pct > range_pct * 2:
+        return None
+
+    # Check if tests are increasing in
+    # frequency (acceleration)
+    recent_tests = [
+        p for p in best_cluster["cluster"] if p["candle_idx"] >= lookback - 5
+    ]
+    is_accelerating = len(recent_tests) >= min_tests - 1
+
+    # Check volume on recent tests
+    recent_volume = data["Volume"].tail(3).mean()
+    avg_volume = data["Volume"].tail(lookback).mean()
+    volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1.0
+
+    # Determine urgency
+    if best_cluster["num_tests"] >= 5 and is_accelerating:
+        urgency = "CRITICAL"
+    elif best_cluster["num_tests"] >= 4 or is_accelerating:
+        urgency = "HIGH"
+    else:
+        urgency = "MODERATE"
+
+    # Check if price is above or below the level
+    position = "ABOVE" if current_price > best_cluster["avg_price"] else "BELOW"
+
+    alert = {
+        "type": "PRICE_RANGE_TEST",
+        "level_type": best_cluster["type"],
+        "level_price": best_cluster["avg_price"],
+        "current_price": current_price,
+        "num_tests": best_cluster["num_tests"],
+        "distance_pct": distance_pct,
+        "position": position,
+        "urgency": urgency,
+        "is_accelerating": is_accelerating,
+        "volume_ratio": volume_ratio,
+        "range_pct": range_pct,
+        "lookback": lookback,
+        "timestamp": data.index[-1]
+        if hasattr(data.index[-1], "strftime")
+        else datetime.now(),
+    }
+
+    return alert
+
+
 def volume_anomaly_alert(data, threshold=2.1, n_candles=5):
     """
     Makes an alert whenever the
@@ -388,19 +542,53 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
             roc_weight=0.5,
             candle_size_weight=0.05,
         )
-        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=3)
+        range_test_signal = price_range_test_alert(
+            data, range_pct=0.1, min_tests=13, lookback=17
+        )
 
         return {
             "symbol": symbol,
             "timestamp": datetime.now(),
             "std_signal": std_signal,
             "trend_signal": trend_signal,
-            "volume_signal": volume_signal,
+            "range_test_signal": range_test_signal,
             "data": data,  # Include data in case you need it
         }
 
     except Exception as e:
         console.print(f"[red]Error checking alerts: {e}[/red]")
+        return None
+
+
+def check_volume_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
+    """
+    Check for volume anomaly alerts.
+
+    Args:
+        symbol: String
+        lookback: Integer
+        Interval: String
+        Offset: Integer
+    Returns:
+        dict containing volume signal
+    """
+    try:
+        data = parse_yahoo_data(
+            get_yahoo_finance_data(
+                symbol, lookback=lookback, interval=interval, offset=offset
+            )
+        )
+
+        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=3)
+
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now(),
+            "volume_signal": volume_signal,
+        }
+
+    except Exception as e:
+        console.print(f"[red]Error checking volume alerts: {e}[/red]")
         return None
 
 
@@ -414,7 +602,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
 
     std_signal = alerts.get("std_signal")
     trend_signal = alerts.get("trend_signal")
-    volume_signal = alerts.get("volume_signal")
+    range_test_signal = alerts.get("range_test_signal")
+
     if std_signal:
         console.print("\n[bold red]🔔 MEAN REVERSION ALERT![/bold red]")
         console.print(
@@ -464,6 +653,102 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
             f"Red Score: {trend_signal['red_score']:.2f}"
         )
         message_queue.put(discord_msg)
+
+    if range_test_signal:
+        # Color coding based on urgency
+        urgency_colors = {
+            "CRITICAL": "bold red",
+            "HIGH": "bold yellow",
+            "MODERATE": "bold blue",
+        }
+        color = urgency_colors.get(range_test_signal["urgency"], "bold blue")
+
+        console.print(f"\n[{color}]🎯 PRICE RANGE TEST ALERT![/{color}]")
+        console.print(
+            f"[dim]Time: {range_test_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+        )
+        console.print(f"Level Type: {range_test_signal['level_type']}")
+        console.print(f"Level Price: ${range_test_signal['level_price']:.2f}")
+        console.print(
+            f"Current Price: ${range_test_signal['current_price']:.2f} ({range_test_signal['position']})"
+        )
+        console.print(f"Number of Tests: {range_test_signal['num_tests']}")
+        console.print(f"Distance from Level: {range_test_signal['distance_pct']:.2f}%")
+        console.print(f"Urgency: [{color}]{range_test_signal['urgency']}[/{color}]")
+
+        if range_test_signal["is_accelerating"]:
+            console.print(
+                "[bold red]⚡ Tests are ACCELERATING - Move Imminent![/bold red]"
+            )
+
+        console.print(f"Volume Ratio: {range_test_signal['volume_ratio']:.2f}x average")
+
+        # Actionable interpretation
+        action_text = ""
+        if (
+            range_test_signal["level_type"] == "RESISTANCE"
+            and range_test_signal["position"] == "BELOW"
+        ):
+            if range_test_signal["urgency"] in ["CRITICAL", "HIGH"]:
+                action_msg = (
+                    "💡 Watch for breakout ABOVE resistance - potential LONG setup"
+                )
+                console.print(f"[green]{action_msg}[/green]")
+                action_text = f"\n{action_msg}"
+            else:
+                action_msg = "💡 Monitor for rejection or breakout"
+                console.print(f"[yellow]{action_msg}[/yellow]")
+                action_text = f"\n{action_msg}"
+        elif (
+            range_test_signal["level_type"] == "SUPPORT"
+            and range_test_signal["position"] == "ABOVE"
+        ):
+            if range_test_signal["urgency"] in ["CRITICAL", "HIGH"]:
+                action_msg = (
+                    "💡 Watch for breakdown BELOW support - potential SHORT setup"
+                )
+                console.print(f"[red]{action_msg}[/red]")
+                action_text = f"\n{action_msg}"
+            else:
+                action_msg = "💡 Monitor for bounce or breakdown"
+                console.print(f"[yellow]{action_msg}[/yellow]")
+                action_text = f"\n{action_msg}"
+
+        # Send to Discord
+        accelerating_text = ""
+        if range_test_signal["is_accelerating"]:
+            accelerating_text = "\n⚡ Tests are ACCELERATING - Move Imminent!"
+
+        urgency_emoji = (
+            "🚨"
+            if range_test_signal["urgency"] == "CRITICAL"
+            else "⚠️"
+            if range_test_signal["urgency"] == "HIGH"
+            else "ℹ️"
+        )
+
+        discord_msg = (
+            f"🎯 **PRICE RANGE TEST ALERT!** {urgency_emoji}\n"
+            f"Time: {range_test_signal['timestamp'].strftime('%H:%M:%S')}\n"
+            f"**{range_test_signal['level_type']}** at ${range_test_signal['level_price']:.2f}\n"
+            f"Current: ${range_test_signal['current_price']:.2f} ({range_test_signal['position']} level)\n"
+            f"Tests: {range_test_signal['num_tests']} | Distance: {range_test_signal['distance_pct']:.2f}%\n"
+            f"**Urgency: {range_test_signal['urgency']}**\n"
+            f"Volume: {range_test_signal['volume_ratio']:.2f}x average"
+            f"{accelerating_text}"
+            f"{action_text}"
+        )
+        message_queue.put(discord_msg)
+
+
+def display_volume_alerts(alerts: Optional[Dict[Any, Any]]):
+    """
+    Display volume alerts in terminal and on Discord
+    """
+    if alerts is None:
+        return
+
+    volume_signal = alerts.get("volume_signal")
 
     if volume_signal:
         console.print("\n[bold yellow]🔔 VOLUME TREND ALERT![/bold yellow]")
@@ -519,6 +804,55 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         message_queue.put(discord_msg)
 
 
+def volume_monitor_loop(symbol="QQQ", interval_seconds=180, stop_event=None):
+    """
+    Continuously monitor for volume alerts in a loop.
+
+    Args:
+        symbol: Stock ticker to monitor
+        interval_seconds: How often to check (in seconds)
+        stop_event: threading.Event to signal when to stop
+    """
+    console.print(f"[green]Starting volume monitor for {symbol}...[/green]")
+
+    while True:
+        # Check if main loop has terminated
+        if stop_event and stop_event.is_set():
+            console.print("[yellow]Volume monitor stopped.[/yellow]")
+            break
+
+        alerts = check_volume_alerts(symbol=symbol, interval="3m")
+
+        if alerts:
+            display_volume_alerts(alerts)
+
+        sleep(interval_seconds)
+
+
+def start_volume_monitor_thread(symbol="QQQ", interval_seconds=180):
+    """
+    Start the volume monitor in a background thread.
+
+    Args:
+        symbol: Stock ticker to monitor
+        interval_seconds: How often to check (default 180 = 3 minutes)
+
+    Returns:
+        tuple: (thread, stop_event) - use stop_event.set() to stop the thread
+    """
+    stop_event = Event()
+
+    monitor_thread = threading.Thread(
+        target=volume_monitor_loop,
+        args=(symbol, interval_seconds, stop_event),
+        daemon=True,  # Thread will close when main program exits
+    )
+
+    monitor_thread.start()
+
+    return monitor_thread, stop_event
+
+
 def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
     """
     Continuously monitor for alerts in a loop.
@@ -537,7 +871,7 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol, interval="3m")
+        alerts = check_alerts(symbol=symbol, interval="3m", offset=19200)
 
         if alerts:
             display_alerts(alerts)
@@ -577,11 +911,22 @@ async def main():
     while not is_bot_ready():
         await asyncio.sleep(0.2)
 
+    # Start main alert monitor (std, trend, range tests) - runs every 91 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
         symbol="QQQ", interval_seconds=91
     )
 
-    console.print("[green]Alert monitor running in background thread.[/green]")
+    # Start volume monitor - runs every 3 minutes (180 seconds)
+    volume_thread, volume_stop_event = start_volume_monitor_thread(
+        symbol="QQQ", interval_seconds=300
+    )
+
+    console.print(
+        "[green]Alert monitor running in background thread (91s interval).[/green]"
+    )
+    console.print(
+        "[green]Volume monitor running in background thread (180s interval).[/green]"
+    )
     console.print("[dim]Press Ctrl+C to stop...[/dim]")
 
     try:
@@ -604,8 +949,14 @@ async def main():
         except asyncio.CancelledError:
             console.print("[dim]✓ Messenger cancelled[/dim]")
 
+        # Stop both monitor threads
         stop_event.set()
-        monitor_thread.join(timeout=2)  # Wait up to 2 seconds for thread to finish
+        monitor_thread.join(timeout=2)
+        console.print("[dim]✓ Main alert monitor stopped[/dim]")
+
+        volume_stop_event.set()
+        volume_thread.join(timeout=2)
+        console.print("[dim]✓ Volume monitor stopped[/dim]")
 
         await stop_bot()
 
