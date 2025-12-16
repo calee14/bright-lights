@@ -97,7 +97,14 @@ def calculate_roc(data, period=5):
     return (current_price - past_price) / past_price
 
 
-def trend_alert(data, threshold=0.7, n_candles=7, decay_rate=0.98, roc_weight=0.3):
+def trend_alert(
+    data,
+    threshold=0.7,
+    n_candles=7,
+    decay_rate=0.98,
+    roc_weight=0.3,
+    candle_size_weight=0.2,
+):
     """
     Makes an alert whenever the ratio
     of bullish vs. bearish scores
@@ -113,6 +120,12 @@ def trend_alert(data, threshold=0.7, n_candles=7, decay_rate=0.98, roc_weight=0.
     """
 
     recent_data = data.tail(n_candles).copy()
+
+    candle_sizes = []
+    for i in range(len(recent_data)):
+        row = recent_data.iloc[i]
+        candle_size = abs(row["Close"] - row["Open"])
+        candle_sizes.append(candle_size)
 
     # Calculate score for upward
     # and downward momentum based
@@ -131,8 +144,33 @@ def trend_alert(data, threshold=0.7, n_candles=7, decay_rate=0.98, roc_weight=0.
         price_move = abs(
             (row["Close"] - row["Open"]) / row["Open"] if row["Open"] != 0 else 0
         )
+        # Calculate rate of change
+        # of candle sizes
+        candle_size_multiplier = 1.0
+        if i >= 2:
+            prev_avg_size = sum(candle_sizes[max(0, i - 3) : i]) / min(i, 3)
+            current_size = candle_sizes[i]
+
+            if prev_avg_size > 0:
+                # Calculate size change ratio
+                size_change = (current_size - prev_avg_size) / prev_avg_size
+
+                # Reward growing candles, punish shrinking candles
+                # Neutral zone: -10% to +10% change (no effect)
+                if abs(size_change) > 0.1:
+                    if size_change > 0:
+                        # Candles getting larger - reward
+                        candle_size_multiplier = 1.0 + (
+                            min(size_change, 0.5) * candle_size_weight
+                        )
+                    else:
+                        # Candles getting smaller - punish
+                        candle_size_multiplier = 1.0 + (
+                            max(size_change, -0.5) * candle_size_weight
+                        )
 
         # Calculate rate of change
+        # of price movement
         # and add it to score
         current_idx = recent_data.index[i]
         data_position = data.index.get_loc(current_idx)
@@ -164,7 +202,9 @@ def trend_alert(data, threshold=0.7, n_candles=7, decay_rate=0.98, roc_weight=0.
         else:
             roc_multiplier = 1.0
 
-        candle_score = price_move * time_weight * roc_multiplier
+        candle_score = (
+            price_move * time_weight * roc_multiplier * candle_size_multiplier
+        )
 
         # Accumulate scores by direction
         if row["Close"] >= row["Open"]:
@@ -341,7 +381,12 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
         # Check for alerts
         std_signal = std_alert(data, std=1.9)
         trend_signal = trend_alert(
-            data, threshold=0.73, n_candles=7, decay_rate=0.9, roc_weight=0.5
+            data,
+            threshold=0.73,
+            n_candles=7,
+            decay_rate=0.9,
+            roc_weight=0.5,
+            candle_size_weight=0.05,
         )
         volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=3)
 

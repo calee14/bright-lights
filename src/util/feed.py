@@ -18,6 +18,7 @@ def get_yahoo_finance_data(symbol, lookback=3600, interval="1m", offset=0):
     if interval[-1] == "m" and int(interval[:-1]) <= 5:
         interval_size = int(interval[:-1])
         interval = "1m"
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
