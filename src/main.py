@@ -18,15 +18,12 @@ from rich.console import Console
 from datetime import datetime
 from threading import Event
 import asyncio
-import json
-import re
-import argparse
-import numpy as np
+
 
 console = Console()
 
 
-def std_alert(data, std=2.0):
+def reversion_alert(data, std=2.0, lookback=8):
     """
     Makes a alert whenever the current
     price (last row in df) reaches
@@ -39,7 +36,7 @@ def std_alert(data, std=2.0):
         dict containing signal
     """
 
-    window = min(10, len(data) - 1)
+    window = min(lookback, len(data) - 1)
     mean = data["Close"].iloc[:-1].tail(window).mean()
     std_dev = data["Close"].iloc[:-1].tail(window).std()
 
@@ -526,69 +523,40 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
     try:
         data = parse_yahoo_data(
             get_yahoo_finance_data(
-                "QQQ", lookback=lookback, interval=interval, offset=offset
+                symbol, lookback=lookback, interval=interval, offset=offset
             )
         )
 
         plot_recent_candlesticks(data, filename="charts/tminus60.jpeg")
 
         # Check for alerts
-        std_signal = std_alert(data, std=1.9)
+        reversion_signal = reversion_alert(data, std=2.3)
         trend_signal = trend_alert(
             data,
-            threshold=0.73,
-            n_candles=7,
-            decay_rate=0.9,
-            roc_weight=0.5,
-            candle_size_weight=0.05,
+            threshold=0.94,
+            n_candles=5,
+            decay_rate=0.85,
+            roc_weight=0.01,
+            candle_size_weight=0.01,
         )
         range_test_signal = price_range_test_alert(
-            data, range_pct=0.1, min_tests=13, lookback=17
+            data, range_pct=0.3, min_tests=28, lookback=15
         )
+
+        volume_anomaly_signal = volume_anomaly_alert(data, threshold=1.5, n_candles=6)
 
         return {
             "symbol": symbol,
             "timestamp": datetime.now(),
-            "std_signal": std_signal,
+            "reversion_signal": reversion_signal,
             "trend_signal": trend_signal,
             "range_test_signal": range_test_signal,
+            "volume_signal": volume_anomaly_signal,
             "data": data,  # Include data in case you need it
         }
 
     except Exception as e:
         console.print(f"[red]Error checking alerts: {e}[/red]")
-        return None
-
-
-def check_volume_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
-    """
-    Check for volume anomaly alerts.
-
-    Args:
-        symbol: String
-        lookback: Integer
-        Interval: String
-        Offset: Integer
-    Returns:
-        dict containing volume signal
-    """
-    try:
-        data = parse_yahoo_data(
-            get_yahoo_finance_data(
-                symbol, lookback=lookback, interval=interval, offset=offset
-            )
-        )
-
-        volume_signal = volume_anomaly_alert(data, threshold=1.3, n_candles=3)
-
-        return {
-            "symbol": symbol,
-            "timestamp": datetime.now(),
-            "volume_signal": volume_signal,
-        }
-
-    except Exception as e:
-        console.print(f"[red]Error checking volume alerts: {e}[/red]")
         return None
 
 
@@ -600,30 +568,33 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
     if alerts is None:
         return
 
-    std_signal = alerts.get("std_signal")
+    reversion_signal = alerts.get("reversion_signal")
     trend_signal = alerts.get("trend_signal")
     range_test_signal = alerts.get("range_test_signal")
+    volume_signal = alerts.get("volume_signal")
 
-    if std_signal:
+    if reversion_signal:
         console.print("\n[bold red]🔔 MEAN REVERSION ALERT![/bold red]")
         console.print(
-            f"[dim]Time: {std_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+            f"[dim]Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
         )
-        console.print(f"Direction: {std_signal['direction']}")
-        console.print(f"Current Price: ${std_signal['current_price']:.2f}")
-        console.print(f"Mean: ${std_signal['mean']:.2f}")
-        console.print(f"Deviation: {std_signal['deviation']:.2f} standard deviations")
-        console.print(f"Volume Ratio: {std_signal['volume_ratio']:.2f}x average")
+        console.print(f"Direction: {reversion_signal['direction']}")
+        console.print(f"Current Price: ${reversion_signal['current_price']:.2f}")
+        console.print(f"Mean: ${reversion_signal['mean']:.2f}")
+        console.print(
+            f"Deviation: {reversion_signal['deviation']:.2f} standard deviations"
+        )
+        console.print(f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average")
 
         # Send to Discord
         discord_msg = (
             f"🔔 **MEAN REVERSION ALERT!**\n"
-            f"Time: {std_signal['timestamp'].strftime('%H:%M:%S')}\n"
-            f"Direction: {std_signal['direction']}\n"
-            f"Current Price: ${std_signal['current_price']:.2f}\n"
-            f"Mean: ${std_signal['mean']:.2f}\n"
-            f"Deviation: {std_signal['deviation']:.2f} standard deviations\n"
-            f"Volume Ratio: {std_signal['volume_ratio']:.2f}x average"
+            f"Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}\n"
+            f"Direction: {reversion_signal['direction']}\n"
+            f"Current Price: ${reversion_signal['current_price']:.2f}\n"
+            f"Mean: ${reversion_signal['mean']:.2f}\n"
+            f"Deviation: {reversion_signal['deviation']:.2f} standard deviations\n"
+            f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average"
         )
         message_queue.put(discord_msg)
 
@@ -740,16 +711,6 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
-
-def display_volume_alerts(alerts: Optional[Dict[Any, Any]]):
-    """
-    Display volume alerts in terminal and on Discord
-    """
-    if alerts is None:
-        return
-
-    volume_signal = alerts.get("volume_signal")
-
     if volume_signal:
         console.print("\n[bold yellow]🔔 VOLUME TREND ALERT![/bold yellow]")
         console.print(
@@ -802,55 +763,6 @@ def display_volume_alerts(alerts: Optional[Dict[Any, Any]]):
             f"{action_text}"
         )
         message_queue.put(discord_msg)
-
-
-def volume_monitor_loop(symbol="QQQ", interval_seconds=180, stop_event=None):
-    """
-    Continuously monitor for volume alerts in a loop.
-
-    Args:
-        symbol: Stock ticker to monitor
-        interval_seconds: How often to check (in seconds)
-        stop_event: threading.Event to signal when to stop
-    """
-    console.print(f"[green]Starting volume monitor for {symbol}...[/green]")
-
-    while True:
-        # Check if main loop has terminated
-        if stop_event and stop_event.is_set():
-            console.print("[yellow]Volume monitor stopped.[/yellow]")
-            break
-
-        alerts = check_volume_alerts(symbol=symbol, interval="3m")
-
-        if alerts:
-            display_volume_alerts(alerts)
-
-        sleep(interval_seconds)
-
-
-def start_volume_monitor_thread(symbol="QQQ", interval_seconds=180):
-    """
-    Start the volume monitor in a background thread.
-
-    Args:
-        symbol: Stock ticker to monitor
-        interval_seconds: How often to check (default 180 = 3 minutes)
-
-    Returns:
-        tuple: (thread, stop_event) - use stop_event.set() to stop the thread
-    """
-    stop_event = Event()
-
-    monitor_thread = threading.Thread(
-        target=volume_monitor_loop,
-        args=(symbol, interval_seconds, stop_event),
-        daemon=True,  # Thread will close when main program exits
-    )
-
-    monitor_thread.start()
-
-    return monitor_thread, stop_event
 
 
 def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
@@ -911,14 +823,9 @@ async def main():
     while not is_bot_ready():
         await asyncio.sleep(0.2)
 
-    # Start main alert monitor (std, trend, range tests) - runs every 91 seconds
+    # Start main alert monitor (mean reversion, trend, range tests) - runs every 91 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="QQQ", interval_seconds=91
-    )
-
-    # Start volume monitor - runs every 3 minutes (180 seconds)
-    volume_thread, volume_stop_event = start_volume_monitor_thread(
-        symbol="QQQ", interval_seconds=300
+        symbol="IWM", interval_seconds=79
     )
 
     console.print(
@@ -953,10 +860,6 @@ async def main():
         stop_event.set()
         monitor_thread.join(timeout=2)
         console.print("[dim]✓ Main alert monitor stopped[/dim]")
-
-        volume_stop_event.set()
-        volume_thread.join(timeout=2)
-        console.print("[dim]✓ Volume monitor stopped[/dim]")
 
         await stop_bot()
 

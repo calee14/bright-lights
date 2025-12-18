@@ -1,5 +1,5 @@
 from src.main import (
-    std_alert,
+    reversion_alert,
     trend_alert,
     volume_anomaly_alert,
     price_range_test_alert,
@@ -21,11 +21,11 @@ console = Console()
 
 # Backtest the std_alert
 # algorithm to find best parameters
-def backtest_std_alert(
+def backtest_reversion_alert(
     data,
     lookback_range=range(6, 15, 1),
-    std_range=np.arange(1.5, 5.0, 0.2),
-    min_signals=10,
+    std_range=np.arange(1.5, 10.0, 0.2),
+    min_signals=5,
 ):
     best_win_rate = 0
     best_params = {}
@@ -50,7 +50,7 @@ def backtest_std_alert(
 
                 for i in range(0, len(data) - lookback + 1, 5):
                     window = data.iloc[i : i + lookback]
-                    signal = std_alert(window, std=std)
+                    signal = reversion_alert(window, std=std)
                     if signal:
                         forward_returns = calculate_forward_returns(
                             data, i + lookback, periods=3
@@ -239,9 +239,9 @@ def backtest_trend_alert(
 # algorithm to find best parameters
 def backtest_price_range_test_alert(
     data,
-    range_pct_range=np.arange(0.3, 1.3, 0.1),
+    range_pct_range=np.arange(0.02, 0.2, 0.02),
     min_tests_range=range(10, 30, 2),
-    lookback_range=range(15, 35, 5),
+    lookback_range=range(5, 25, 2),
     min_signals=5,
 ):
     best_win_rate = 0
@@ -299,14 +299,20 @@ def backtest_price_range_test_alert(
                                     # Expect breakdown down
                                     expected_return = -forward_returns
                                 else:
-                                    # Mixed signal - count any move as win
-                                    expected_return = abs(forward_returns)
+                                    expected_return = 0
+                                    # # Mixed signal - count any move as win
+                                    # if signal["position"] == "BELOW":
+                                    #     expected_return = forward_returns * 0.1
+                                    # elif signal["position"] == "ABOVE":
+                                    #     expected_return = -forward_returns * 0.1
+                                    # else:
+                                    #     expected_return = 0
 
                                 total_return += expected_return
 
                                 if expected_return > 0:
                                     wins += 1
-                                else:
+                                elif expected_return < 0:
                                     losses += 1
                     signal_count = wins + losses
                     # Skip if not enough signals
@@ -468,11 +474,11 @@ if __name__ == "__main__":
         get_yahoo_finance_data("IWM", lookback=691200, interval="3m")
     )
 
-    std_params = backtest_std_alert(data)
+    reversion_params = backtest_reversion_alert(data)
     trend_params = backtest_trend_alert(data)
     price_range_params = backtest_price_range_test_alert(data)
     volume_params = backtest_volume_anomaly_alert(data)
-    print(std_params)
+    print(reversion_params)
     print(trend_params)
     print(price_range_params)
     print(volume_params)
