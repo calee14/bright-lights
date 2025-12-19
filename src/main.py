@@ -877,7 +877,7 @@ async def main():
 
     # Start main alert monitor (mean reversion, trend, range tests) - runs every 131 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="QQQ", interval_seconds=131
+        symbol="MNQ=F", interval_seconds=131
     )
 
     console.print(

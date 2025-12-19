@@ -16,6 +16,8 @@ from rich.progress import (
     BarColumn,
     TimeRemainingColumn,
 )
+from multiprocessing import Pool, cpu_count
+from itertools import product
 import numpy as np
 
 console = Console()
@@ -121,118 +123,241 @@ def backtest_reversion_alert(
 
 # Backtest the trend alert
 # algorithm to find best parameters
+def backtest_single_trend_combination(args):
+    """Test a single parameter combination for trend_alert"""
+    (
+        threshold,
+        n_candles,
+        decay_rate,
+        roc_weight,
+        volume_weight,
+        data_dict,
+        forward_period,
+        min_signals,
+    ) = args
+
+    # Reconstruct DataFrame from dict (needed for multiprocessing)
+    import pandas as pd
+
+    data = pd.DataFrame(data_dict)
+
+    wins = 0
+    losses = 0
+    total_return = 0
+
+    for i in range(0, len(data) - n_candles + 1, 5):
+        window = data.iloc[i : i + n_candles]
+        signal = trend_alert(
+            window,
+            threshold=threshold,
+            n_candles=n_candles,
+            decay_rate=decay_rate,
+            roc_weight=roc_weight,
+            volume_weight=volume_weight,
+        )
+
+        if signal:
+            forward_returns = calculate_forward_returns(
+                data, i + n_candles, periods=forward_period
+            )
+
+            if forward_returns is not None:
+                if signal["direction"] == "UPTREND":
+                    expected_return = forward_returns
+                else:
+                    expected_return = -forward_returns
+
+                total_return += expected_return
+
+                if expected_return > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+    signal_count = wins + losses
+
+    if signal_count < min_signals:
+        return None
+
+    win_rate = wins / signal_count
+    sample_penalty = min(signal_count / (min_signals * 2), 1.0)
+    adjusted_win_rate = win_rate * sample_penalty
+
+    return {
+        "threshold": float(threshold),
+        "n_candles": int(n_candles),
+        "decay_rate": float(decay_rate),
+        "roc_weight": float(roc_weight),
+        "volume_weight": float(volume_weight),
+        "wins": wins,
+        "losses": losses,
+        "signal_count": signal_count,
+        "win_rate": win_rate,
+        "adjusted_win_rate": adjusted_win_rate,
+        "total_return": total_return,
+        "avg_return": total_return / signal_count,
+    }
+
+
 def backtest_trend_alert(
     data,
     threshold_range=np.arange(0.9, 0.99, 0.02),
-    n_candles_range=range(3, 9, 1),
-    decay_rate_range=np.arange(0.80, 0.95, 0.02),
-    roc_weight_range=np.arange(0.01, 0.3, 0.1),
-    volume_weight_range=np.arange(0.1, 0.33, 0.05),
+    n_candles_range=range(3, 13, 2),
+    decay_rate_range=np.arange(0.80, 0.95, 0.05),
+    roc_weight_range=np.arange(0.1, 0.33, 0.08),
+    volume_weight_range=np.arange(0.1, 0.33, 0.08),
     min_signals=5,
+    forward_period=5,
+    use_multiprocessing=True,
 ):
     best_win_rate = 0
     best_params = {}
 
-    total_combinations = (
-        len(list(threshold_range))
-        * len(n_candles_range)
-        * len(list(decay_rate_range))
-        * len(list(roc_weight_range))
-        * len(list(volume_weight_range))
+    # Create all combinations
+    combinations = list(
+        product(
+            threshold_range,
+            n_candles_range,
+            decay_rate_range,
+            roc_weight_range,
+            volume_weight_range,
+        )
     )
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        task = progress.add_task(
-            "[magenta]Backtesting trend_alert...", total=total_combinations
+    total_combinations = len(combinations)
+
+    if use_multiprocessing:
+        # Convert DataFrame to dict for multiprocessing (picklable)
+        data_dict = data.to_dict("list")
+
+        # Add data and other args to each combination
+        args_list = [
+            (t, n, d, r, v, data_dict, forward_period, min_signals)
+            for t, n, d, r, v in combinations
+        ]
+
+        num_cores = cpu_count()
+        console.print(
+            f"[cyan]Testing {total_combinations} combinations using {num_cores} cores...[/cyan]"
         )
 
-        for threshold in threshold_range:
-            for n_candles in n_candles_range:
-                for decay_rate in decay_rate_range:
-                    for roc_weight in roc_weight_range:
-                        for volume_weight in volume_weight_range:
-                            wins = 0
-                            losses = 0
-                            total_return = 0
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "[magenta]Backtesting trend_alert...", total=total_combinations
+            )
 
-                            for i in range(0, len(data) - n_candles + 1, 5):
-                                window = data.iloc[i : i + n_candles]
-                                signal = trend_alert(
-                                    window,
-                                    threshold=threshold,
-                                    n_candles=n_candles,
-                                    decay_rate=decay_rate,
-                                    roc_weight=roc_weight,
-                                    volume_weight=volume_weight,
-                                )
+            # Use multiprocessing
+            with Pool(num_cores) as pool:
+                for result in pool.imap_unordered(
+                    backtest_single_trend_combination, args_list, chunksize=10
+                ):
+                    if result and result["adjusted_win_rate"] > best_win_rate:
+                        best_win_rate = result["adjusted_win_rate"]
+                        best_params = result
 
-                                if signal:
-                                    forward_returns = calculate_forward_returns(
-                                        data, i + n_candles, periods=forward_period
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=f"[magenta]trend_alert: best WR={best_win_rate:.1%} ({best_params.get('signal_count', 0)} signals)",
+                    )
+    else:
+        # Original single-threaded version
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                "[magenta]Backtesting trend_alert...", total=total_combinations
+            )
+
+            for threshold in threshold_range:
+                for n_candles in n_candles_range:
+                    for decay_rate in decay_rate_range:
+                        for roc_weight in roc_weight_range:
+                            for volume_weight in volume_weight_range:
+                                wins = 0
+                                losses = 0
+                                total_return = 0
+
+                                for i in range(0, len(data) - n_candles + 1, 5):
+                                    window = data.iloc[i : i + n_candles]
+                                    signal = trend_alert(
+                                        window,
+                                        threshold=threshold,
+                                        n_candles=n_candles,
+                                        decay_rate=decay_rate,
+                                        roc_weight=roc_weight,
+                                        volume_weight=volume_weight,
                                     )
 
-                                    if forward_returns is not None:
-                                        if signal["direction"] == "UPTREND":
-                                            expected_return = forward_returns
-                                        else:
-                                            expected_return = -forward_returns
+                                    if signal:
+                                        forward_returns = calculate_forward_returns(
+                                            data, i + n_candles, periods=forward_period
+                                        )
 
-                                        total_return += expected_return
+                                        if forward_returns is not None:
+                                            if signal["direction"] == "UPTREND":
+                                                expected_return = forward_returns
+                                            else:
+                                                expected_return = -forward_returns
 
-                                        if expected_return > 0:
-                                            wins += 1
-                                        else:
-                                            losses += 1
+                                            total_return += expected_return
 
-                            signal_count = wins + losses
+                                            if expected_return > 0:
+                                                wins += 1
+                                            else:
+                                                losses += 1
 
-                            # Skip if not enough signals
-                            if signal_count < min_signals:
-                                win_rate = 0
-                                adjusted_win_rate = 0
-                            else:
-                                win_rate = wins / signal_count
+                                signal_count = wins + losses
 
-                                # Apply penalty for low sample sizes
-                                sample_penalty = min(
-                                    signal_count / (min_signals * 2), 1.0
+                                if signal_count < min_signals:
+                                    win_rate = 0
+                                    adjusted_win_rate = 0
+                                else:
+                                    win_rate = wins / signal_count
+                                    sample_penalty = min(
+                                        signal_count / (min_signals * 2), 1.0
+                                    )
+                                    adjusted_win_rate = win_rate * sample_penalty
+
+                                if (
+                                    adjusted_win_rate > best_win_rate
+                                    and signal_count >= min_signals
+                                ):
+                                    best_win_rate = adjusted_win_rate
+                                    best_params = {
+                                        "threshold": threshold,
+                                        "n_candles": n_candles,
+                                        "decay_rate": decay_rate,
+                                        "roc_weight": roc_weight,
+                                        "volume_weight": volume_weight,
+                                        "wins": wins,
+                                        "losses": losses,
+                                        "signal_count": signal_count,
+                                        "win_rate": win_rate,
+                                        "adjusted_win_rate": adjusted_win_rate,
+                                        "total_return": total_return,
+                                        "avg_return": total_return / signal_count
+                                        if signal_count > 0
+                                        else 0,
+                                    }
+
+                                progress.update(
+                                    task,
+                                    advance=1,
+                                    description=f"[magenta]trend_alert: thresh={threshold:.2f}, n={n_candles}, WR={win_rate:.1%} ({signal_count})",
                                 )
-                                adjusted_win_rate = win_rate * sample_penalty
-
-                            if (
-                                adjusted_win_rate > best_win_rate
-                                and signal_count >= min_signals
-                            ):
-                                best_win_rate = adjusted_win_rate
-                                best_params = {
-                                    "threshold": threshold,
-                                    "n_candles": n_candles,
-                                    "decay_rate": decay_rate,
-                                    "roc_weight": roc_weight,
-                                    "volume_weight": volume_weight,
-                                    "wins": wins,
-                                    "losses": losses,
-                                    "signal_count": signal_count,
-                                    "win_rate": win_rate,
-                                    "adjusted_win_rate": adjusted_win_rate,
-                                    "total_return": total_return,
-                                    "avg_return": total_return / signal_count
-                                    if signal_count > 0
-                                    else 0,
-                                }
-
-                            progress.update(
-                                task,
-                                advance=1,
-                                description=f"[magenta]trend_alert: thresh={threshold:.2f}, n={n_candles}, WR={win_rate:.1%} ({signal_count})",
-                            )
 
     console.print(
         f"[green]✓ trend_alert complete! Best adjusted win rate: {best_win_rate:.2%} "
@@ -496,7 +621,7 @@ def save_params_to_json(params, filename):
 if __name__ == "__main__":
     # Get data from past 8 days
     data = parse_yahoo_data(
-        get_yahoo_finance_data("QQQ", lookback=691200, interval="3m")
+        get_yahoo_finance_data("MNQ=F", lookback=691200, interval="3m")
     )
 
     reversion_params = backtest_reversion_alert(data)
