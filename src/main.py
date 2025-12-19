@@ -1,4 +1,6 @@
 # src/main.py
+import json
+from pathlib import Path
 import threading
 from time import sleep, time
 from typing import Any, List, Dict, Optional
@@ -100,7 +102,7 @@ def trend_alert(
     n_candles=7,
     decay_rate=0.98,
     roc_weight=0.3,
-    candle_size_weight=0.2,
+    volume_weight=0.2,
 ):
     """
     Makes an alert whenever the ratio
@@ -141,29 +143,30 @@ def trend_alert(
         price_move = abs(
             (row["Close"] - row["Open"]) / row["Open"] if row["Open"] != 0 else 0
         )
-        # Calculate rate of change
-        # of candle sizes
-        candle_size_multiplier = 1.0
+
+        # Calculate volume multiplier
+        volume_multiplier = 1.0
         if i >= 2:
-            prev_avg_size = sum(candle_sizes[max(0, i - 3) : i]) / min(i, 3)
-            current_size = candle_sizes[i]
+            # Compare current volume to recent average
+            prev_avg_volume = recent_data["Volume"].iloc[max(0, i - 3) : i].mean()
+            current_volume = row["Volume"]
 
-            if prev_avg_size > 0:
-                # Calculate size change ratio
-                size_change = (current_size - prev_avg_size) / prev_avg_size
+            if prev_avg_volume > 0:
+                # Calculate volume change ratio
+                volume_change = (current_volume - prev_avg_volume) / prev_avg_volume
 
-                # Reward growing candles, punish shrinking candles
+                # Reward increasing volume, punish decreasing volume
                 # Neutral zone: -10% to +10% change (no effect)
-                if abs(size_change) > 0.1:
-                    if size_change > 0:
-                        # Candles getting larger - reward
-                        candle_size_multiplier = 1.0 + (
-                            min(size_change, 0.5) * candle_size_weight
+                if abs(volume_change) > 0.1:
+                    if volume_change > 0:
+                        # Volume increasing - reward
+                        volume_multiplier = 1.0 + (
+                            min(volume_change, 1.0) * volume_weight
                         )
                     else:
-                        # Candles getting smaller - punish
-                        candle_size_multiplier = 1.0 + (
-                            max(size_change, -0.5) * candle_size_weight
+                        # Volume decreasing - punish
+                        volume_multiplier = 1.0 + (
+                            max(volume_change, -0.5) * volume_weight
                         )
 
         # Calculate rate of change
@@ -199,9 +202,7 @@ def trend_alert(
         else:
             roc_multiplier = 1.0
 
-        candle_score = (
-            price_move * time_weight * roc_multiplier * candle_size_multiplier
-        )
+        candle_score = price_move * time_weight * roc_multiplier * volume_multiplier
 
         # Accumulate scores by direction
         if row["Close"] >= row["Open"]:
@@ -508,6 +509,21 @@ def volume_anomaly_alert(data, threshold=2.1, n_candles=5):
     return alert
 
 
+def load_params_from_json(filename, default_params=None):
+    """Load parameters from JSON file, return defaults if file doesn't exist"""
+    filepath = Path("backtest_results") / filename
+
+    if filepath.exists():
+        with open(filepath, "r") as f:
+            params = json.load(f)
+        return params
+    else:
+        console.print(
+            f"[yellow]No saved parameters found at {filepath}, using defaults[/yellow]"
+        )
+        return default_params if default_params else {}
+
+
 def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
     """
     Args:
@@ -529,21 +545,54 @@ def check_alerts(symbol="QQQ", lookback=3600, interval="1m", offset=0):
 
         plot_recent_candlesticks(data, filename="charts/tminus60.jpeg")
 
-        # Check for alerts
-        reversion_signal = reversion_alert(data, std=2.3)
-        trend_signal = trend_alert(
-            data,
-            threshold=0.94,
-            n_candles=5,
-            decay_rate=0.85,
-            roc_weight=0.01,
-            candle_size_weight=0.01,
+        # Load optimized parameters from JSON
+        reversion_params = load_params_from_json(
+            "reversion_alert_params.json", default_params={"std": 3.3, "lookback": 7}
         )
-        range_test_signal = price_range_test_alert(
-            data, range_pct=0.3, min_tests=28, lookback=15
+        trend_params = load_params_from_json(
+            "trend_alert_params.json",
+            default_params={
+                "threshold": 0.9,
+                "n_candles": 7,
+                "decay_rate": 0.9,
+                "roc_weight": 0.01,
+                "volume_weight": 0.15,
+            },
+        )
+        range_params = load_params_from_json(
+            "price_range_test_alert_params.json",
+            default_params={"range_pct": 0.06, "min_tests": 9, "lookback": 9},
+        )
+        volume_params = load_params_from_json(
+            "volume_anomaly_alert_params.json",
+            default_params={"threshold": 2.4, "n_candles": 8},
         )
 
-        volume_anomaly_signal = volume_anomaly_alert(data, threshold=1.5, n_candles=6)
+        # Check for alerts
+        reversion_signal = reversion_alert(
+            data,
+            std=reversion_params.get("std", 3.3),
+            lookback=reversion_params.get("lookback", 7),
+        )
+        trend_signal = trend_alert(
+            data,
+            threshold=trend_params.get("threshold", 0.9),
+            n_candles=trend_params.get("n_candles", 7),
+            decay_rate=trend_params.get("decay_rate", 0.9),
+            roc_weight=trend_params.get("roc_weight", 0.01),
+            volume_weight=trend_params.get("volume_weight", 0.15),
+        )
+        range_test_signal = price_range_test_alert(
+            data,
+            range_pct=range_params.get("range_pct", 0.06),
+            min_tests=range_params.get("min_tests", 9),
+            lookback=range_params.get("lookback", 9),
+        )
+        volume_anomaly_signal = volume_anomaly_alert(
+            data,
+            threshold=volume_params.get("threshold", 2.4),
+            n_candles=volume_params.get("n_candles", 8),
+        )
 
         return {
             "symbol": symbol,
@@ -625,7 +674,10 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
-    if range_test_signal:
+    if range_test_signal and (
+        range_test_signal["urgency"] == "CRITICAL"
+        or range_test_signal["level_type"] != "MIXED"
+    ):
         # Color coding based on urgency
         urgency_colors = {
             "CRITICAL": "bold red",
@@ -823,9 +875,9 @@ async def main():
     while not is_bot_ready():
         await asyncio.sleep(0.2)
 
-    # Start main alert monitor (mean reversion, trend, range tests) - runs every 91 seconds
+    # Start main alert monitor (mean reversion, trend, range tests) - runs every 131 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="IWM", interval_seconds=79
+        symbol="QQQ", interval_seconds=131
     )
 
     console.print(

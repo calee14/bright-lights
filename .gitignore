@@ -170,3 +170,5 @@ cython_debug/
 *.csv
 charts/
 report/
+
+backtest_results/

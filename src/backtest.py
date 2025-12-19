@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from src.main import (
     reversion_alert,
     trend_alert,
@@ -17,6 +19,8 @@ from rich.progress import (
 import numpy as np
 
 console = Console()
+
+forward_period = 3
 
 
 # Backtest the std_alert
@@ -53,7 +57,7 @@ def backtest_reversion_alert(
                     signal = reversion_alert(window, std=std)
                     if signal:
                         forward_returns = calculate_forward_returns(
-                            data, i + lookback, periods=3
+                            data, i + lookback, periods=forward_period
                         )
 
                         if forward_returns is not None:
@@ -110,6 +114,8 @@ def backtest_reversion_alert(
         f"(raw: {best_params.get('win_rate', 0):.2%}, {best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
 
+    save_params_to_json(best_params, "reversion_alert_params.json")
+
     return best_params
 
 
@@ -119,10 +125,10 @@ def backtest_trend_alert(
     data,
     threshold_range=np.arange(0.9, 0.99, 0.02),
     n_candles_range=range(3, 9, 1),
-    decay_rate_range=np.arange(0.85, 0.95, 0.02),
-    roc_weight_range=np.arange(0.01, 0.5, 0.02),
-    candle_size_weight_range=np.arange(0.01, 0.03, 0.01),
-    min_signals=10,
+    decay_rate_range=np.arange(0.80, 0.95, 0.02),
+    roc_weight_range=np.arange(0.01, 0.3, 0.1),
+    volume_weight_range=np.arange(0.1, 0.33, 0.05),
+    min_signals=5,
 ):
     best_win_rate = 0
     best_params = {}
@@ -132,7 +138,7 @@ def backtest_trend_alert(
         * len(n_candles_range)
         * len(list(decay_rate_range))
         * len(list(roc_weight_range))
-        * len(list(candle_size_weight_range))
+        * len(list(volume_weight_range))
     )
 
     with Progress(
@@ -151,7 +157,7 @@ def backtest_trend_alert(
             for n_candles in n_candles_range:
                 for decay_rate in decay_rate_range:
                     for roc_weight in roc_weight_range:
-                        for candle_size_weight in candle_size_weight_range:
+                        for volume_weight in volume_weight_range:
                             wins = 0
                             losses = 0
                             total_return = 0
@@ -164,12 +170,12 @@ def backtest_trend_alert(
                                     n_candles=n_candles,
                                     decay_rate=decay_rate,
                                     roc_weight=roc_weight,
-                                    candle_size_weight=candle_size_weight,
+                                    volume_weight=volume_weight,
                                 )
 
                                 if signal:
                                     forward_returns = calculate_forward_returns(
-                                        data, i + n_candles, periods=5
+                                        data, i + n_candles, periods=forward_period
                                     )
 
                                     if forward_returns is not None:
@@ -210,7 +216,7 @@ def backtest_trend_alert(
                                     "n_candles": n_candles,
                                     "decay_rate": decay_rate,
                                     "roc_weight": roc_weight,
-                                    "candle_size_weight": candle_size_weight,
+                                    "volume_weight": volume_weight,
                                     "wins": wins,
                                     "losses": losses,
                                     "signal_count": signal_count,
@@ -232,6 +238,8 @@ def backtest_trend_alert(
         f"[green]✓ trend_alert complete! Best adjusted win rate: {best_win_rate:.2%} "
         f"(raw: {best_params.get('win_rate', 0):.2%}, {best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
+
+    save_params_to_json(best_params, "trend_alert_params.json")
     return best_params
 
 
@@ -240,7 +248,7 @@ def backtest_trend_alert(
 def backtest_price_range_test_alert(
     data,
     range_pct_range=np.arange(0.02, 0.2, 0.02),
-    min_tests_range=range(10, 30, 2),
+    min_tests_range=range(5, 30, 2),
     lookback_range=range(5, 25, 2),
     min_signals=5,
 ):
@@ -354,6 +362,8 @@ def backtest_price_range_test_alert(
     console.print(
         f"[green]✓ price_range_test_alert complete! Best win rate: {best_win_rate:.2%} ({best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
+
+    save_params_to_json(best_params, "price_range_test_alert_params.json")
     return best_params
 
 
@@ -361,8 +371,8 @@ def backtest_price_range_test_alert(
 # algorithm to find best parameters
 def backtest_volume_anomaly_alert(
     data,
-    threshold_range=np.arange(1.5, 5.5, 0.5),
-    n_candles_range=range(3, 10, 1),
+    threshold_range=np.arange(1.5, 8, 0.2),
+    n_candles_range=range(3, 13, 1),
     min_signals=5,
 ):
     best_win_rate = 0
@@ -395,7 +405,7 @@ def backtest_volume_anomaly_alert(
 
                     if signal:
                         forward_returns = calculate_forward_returns(
-                            data, i + (n_candles * 2), periods=3
+                            data, i + (n_candles * 2), periods=forward_period
                         )
 
                         if forward_returns is not None:
@@ -455,6 +465,9 @@ def backtest_volume_anomaly_alert(
     console.print(
         f"[green]✓ volume_anomaly_alert complete! Best win rate: {best_win_rate:.2%} ({best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
+
+    save_params_to_json(best_params, "volume_anomaly_alert_params.json")
+
     return best_params
 
 
@@ -468,10 +481,22 @@ def calculate_forward_returns(data, start_idx, periods=3):
     return end_price - start_price
 
 
+def save_params_to_json(params, filename):
+    """Save parameters to JSON file"""
+    output_dir = Path("backtest_results")
+    output_dir.mkdir(exist_ok=True)
+
+    filepath = output_dir / filename
+    with open(filepath, "w") as f:
+        json.dump(params, f, indent=2)
+
+    console.print(f"[green]✓ Saved parameters to {filepath}[/green]")
+
+
 if __name__ == "__main__":
     # Get data from past 8 days
     data = parse_yahoo_data(
-        get_yahoo_finance_data("IWM", lookback=691200, interval="3m")
+        get_yahoo_finance_data("QQQ", lookback=691200, interval="3m")
     )
 
     reversion_params = backtest_reversion_alert(data)
