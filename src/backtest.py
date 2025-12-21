@@ -23,6 +23,7 @@ import numpy as np
 console = Console()
 
 forward_period = 3
+min_signals = 20
 
 
 # Backtest the std_alert
@@ -618,17 +619,399 @@ def save_params_to_json(params, filename):
     console.print(f"[green]✓ Saved parameters to {filepath}[/green]")
 
 
+def test_all_alerts(test_data, forward_period=3):
+    """
+    Test all alerts using previously calculated optimal parameters.
+    Loads parameters from JSON files and runs backtests on test data.
+
+    Args:
+        test_data: DataFrame with test data
+        forward_period: Number of periods to look forward for returns
+    """
+    import json
+    from pathlib import Path
+    from rich.table import Table
+
+    results_dir = Path("backtest_results")
+
+    # Dictionary to store all results
+    all_results = {}
+
+    # Load parameters and test each alert type
+    alert_configs = [
+        {
+            "name": "reversion_alert",
+            "file": "reversion_alert_params.json",
+            "function": reversion_alert,
+            "test_func": test_reversion_alert,
+        },
+        {
+            "name": "trend_alert",
+            "file": "trend_alert_params.json",
+            "function": trend_alert,
+            "test_func": test_trend_alert,
+        },
+        {
+            "name": "price_range_test_alert",
+            "file": "price_range_test_alert_params.json",
+            "function": price_range_test_alert,
+            "test_func": test_price_range_alert,
+        },
+        {
+            "name": "volume_anomaly_alert",
+            "file": "volume_anomaly_alert_params.json",
+            "function": volume_anomaly_alert,
+            "test_func": test_volume_alert,
+        },
+    ]
+
+    console.print("\n[bold cyan]Testing Alerts on Out-of-Sample Data[/bold cyan]\n")
+
+    for config in alert_configs:
+        param_file = results_dir / config["file"]
+
+        if not param_file.exists():
+            console.print(
+                f"[yellow]⚠ {config['name']}: Parameters file not found, skipping[/yellow]"
+            )
+            continue
+
+        # Load parameters
+        with open(param_file, "r") as f:
+            params = json.load(f)
+
+        # Run test
+        console.print(f"[cyan]Testing {config['name']}...[/cyan]")
+        result = config["test_func"](test_data, params, forward_period)
+        all_results[config["name"]] = result
+
+    # Display summary table
+    display_results_table(all_results)
+
+    return all_results
+
+
+def test_reversion_alert(data, params, forward_period):
+    """Test reversion alert with given parameters"""
+    lookback = params["lookback"]
+    std = params["std"]
+
+    wins = 0
+    losses = 0
+    total_return = 0
+    signals = []
+
+    for i in range(0, len(data) - lookback + 1, 5):
+        window = data.iloc[i : i + lookback]
+        signal = reversion_alert(window, std=std)
+
+        if signal:
+            forward_returns = calculate_forward_returns(
+                data, i + lookback, periods=forward_period
+            )
+
+            if forward_returns is not None:
+                # Mean reversion: ABOVE means price is high, expect down
+                if signal["direction"] == "ABOVE":
+                    expected_return = -forward_returns
+                else:
+                    expected_return = forward_returns
+
+                total_return += expected_return
+
+                if expected_return > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                signals.append(
+                    {"index": i + lookback, "signal": signal, "return": expected_return}
+                )
+
+    signal_count = wins + losses
+    win_rate = wins / signal_count if signal_count > 0 else 0
+    avg_return = total_return / signal_count if signal_count > 0 else 0
+
+    return {
+        "params": {"lookback": lookback, "std": std},
+        "wins": wins,
+        "losses": losses,
+        "signal_count": signal_count,
+        "win_rate": win_rate,
+        "total_return": total_return,
+        "avg_return": avg_return,
+        "signals": signals,
+    }
+
+
+def test_trend_alert(data, params, forward_period):
+    """Test trend alert with given parameters"""
+    threshold = params["threshold"]
+    n_candles = params["n_candles"]
+    decay_rate = params["decay_rate"]
+    roc_weight = params["roc_weight"]
+    volume_weight = params["volume_weight"]
+
+    wins = 0
+    losses = 0
+    total_return = 0
+    signals = []
+
+    for i in range(0, len(data) - n_candles + 1, 5):
+        window = data.iloc[i : i + n_candles]
+        signal = trend_alert(
+            window,
+            threshold=threshold,
+            n_candles=n_candles,
+            decay_rate=decay_rate,
+            roc_weight=roc_weight,
+            volume_weight=volume_weight,
+        )
+
+        if signal:
+            forward_returns = calculate_forward_returns(
+                data, i + n_candles, periods=forward_period
+            )
+
+            if forward_returns is not None:
+                if signal["direction"] == "UPTREND":
+                    expected_return = forward_returns
+                else:
+                    expected_return = -forward_returns
+
+                total_return += expected_return
+
+                if expected_return > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                signals.append(
+                    {
+                        "index": i + n_candles,
+                        "signal": signal,
+                        "return": expected_return,
+                    }
+                )
+
+    signal_count = wins + losses
+    win_rate = wins / signal_count if signal_count > 0 else 0
+    avg_return = total_return / signal_count if signal_count > 0 else 0
+
+    return {
+        "params": {
+            "threshold": threshold,
+            "n_candles": n_candles,
+            "decay_rate": decay_rate,
+            "roc_weight": roc_weight,
+            "volume_weight": volume_weight,
+        },
+        "wins": wins,
+        "losses": losses,
+        "signal_count": signal_count,
+        "win_rate": win_rate,
+        "total_return": total_return,
+        "avg_return": avg_return,
+        "signals": signals,
+    }
+
+
+def test_price_range_alert(data, params, forward_period):
+    """Test price range alert with given parameters"""
+    range_pct = params["range_pct"]
+    min_tests = params["min_tests"]
+    lookback = params["lookback"]
+
+    wins = 0
+    losses = 0
+    total_return = 0
+    signals = []
+
+    for i in range(0, len(data) - lookback + 1, 5):
+        window = data.iloc[i : i + lookback]
+        signal = price_range_test_alert(
+            window,
+            range_pct=range_pct,
+            min_tests=min_tests,
+            lookback=lookback,
+        )
+
+        if signal:
+            forward_returns = calculate_forward_returns(
+                data, i + lookback, periods=forward_period
+            )
+
+            if forward_returns is not None:
+                # Determine expected direction
+                if (
+                    signal["level_type"] == "RESISTANCE"
+                    and signal["position"] == "BELOW"
+                ):
+                    # Expect breakout up
+                    expected_return = forward_returns
+                elif (
+                    signal["level_type"] == "SUPPORT" and signal["position"] == "ABOVE"
+                ):
+                    # Expect breakdown down
+                    expected_return = -forward_returns
+                else:
+                    expected_return = 0
+
+                total_return += expected_return
+
+                if expected_return > 0:
+                    wins += 1
+                elif expected_return < 0:
+                    losses += 1
+
+                signals.append(
+                    {"index": i + lookback, "signal": signal, "return": expected_return}
+                )
+
+    signal_count = wins + losses
+    win_rate = wins / signal_count if signal_count > 0 else 0
+    avg_return = total_return / signal_count if signal_count > 0 else 0
+
+    return {
+        "params": {
+            "range_pct": range_pct,
+            "min_tests": min_tests,
+            "lookback": lookback,
+        },
+        "wins": wins,
+        "losses": losses,
+        "signal_count": signal_count,
+        "win_rate": win_rate,
+        "total_return": total_return,
+        "avg_return": avg_return,
+        "signals": signals,
+    }
+
+
+def test_volume_alert(data, params, forward_period):
+    """Test volume anomaly alert with given parameters"""
+    threshold = params["threshold"]
+    n_candles = params["n_candles"]
+
+    wins = 0
+    losses = 0
+    total_return = 0
+    signals = []
+
+    for i in range(0, len(data) - (n_candles * 2) + 1, 5):
+        window = data.iloc[i : i + (n_candles * 2)]
+        signal = volume_anomaly_alert(window, threshold=threshold, n_candles=n_candles)
+
+        if signal:
+            forward_returns = calculate_forward_returns(
+                data, i + (n_candles * 2), periods=forward_period
+            )
+
+            if forward_returns is not None:
+                # Determine expected direction based on interpretation
+                if signal["interpretation"] == "STRONG_UPTREND":
+                    expected_return = forward_returns
+                elif signal["interpretation"] == "STRONG_DOWNTREND":
+                    expected_return = -forward_returns
+                elif signal["interpretation"] == "UPTREND_WEAKENING":
+                    expected_return = -forward_returns
+                elif signal["interpretation"] == "DOWNTREND_WEAKENING":
+                    expected_return = forward_returns
+                else:
+                    # UNCLEAR - skip
+                    continue
+
+                total_return += expected_return
+
+                if expected_return > 0:
+                    wins += 1
+                else:
+                    losses += 1
+
+                signals.append(
+                    {
+                        "index": i + (n_candles * 2),
+                        "signal": signal,
+                        "return": expected_return,
+                    }
+                )
+
+    signal_count = wins + losses
+    win_rate = wins / signal_count if signal_count > 0 else 0
+    avg_return = total_return / signal_count if signal_count > 0 else 0
+
+    return {
+        "params": {"threshold": threshold, "n_candles": n_candles},
+        "wins": wins,
+        "losses": losses,
+        "signal_count": signal_count,
+        "win_rate": win_rate,
+        "total_return": total_return,
+        "avg_return": avg_return,
+        "signals": signals,
+    }
+
+
+def display_results_table(all_results):
+    """Display a formatted table of all test results"""
+    from rich.table import Table
+
+    table = Table(title="\n[bold]Out-of-Sample Test Results[/bold]", show_header=True)
+
+    table.add_column("Alert Type", style="cyan", no_wrap=True)
+    table.add_column("Signals", justify="right", style="magenta")
+    table.add_column("Wins", justify="right", style="green")
+    table.add_column("Losses", justify="right", style="red")
+    table.add_column("Win Rate", justify="right", style="yellow")
+    table.add_column("Total Return", justify="right", style="blue")
+    table.add_column("Avg Return", justify="right", style="white")
+
+    for name, result in all_results.items():
+        win_rate_pct = f"{result['win_rate']:.1%}"
+        total_return = f"{result['total_return']:+.2f}"
+        avg_return = f"{result['avg_return']:+.4f}"
+
+        # Color win rate based on performance
+        if result["win_rate"] >= 0.55:
+            win_rate_style = "[bold green]"
+        elif result["win_rate"] >= 0.50:
+            win_rate_style = "[green]"
+        elif result["win_rate"] >= 0.45:
+            win_rate_style = "[yellow]"
+        else:
+            win_rate_style = "[red]"
+
+        table.add_row(
+            name.replace("_", " ").title(),
+            str(result["signal_count"]),
+            str(result["wins"]),
+            str(result["losses"]),
+            f"{win_rate_style}{win_rate_pct}[/]",
+            total_return,
+            avg_return,
+        )
+
+    console.print(table)
+    console.print()
+
+
 if __name__ == "__main__":
-    # Get data from past 8 days
+    # Get data from past 8 days (691200 seconds)
     data = parse_yahoo_data(
         get_yahoo_finance_data("MNQ=F", lookback=691200, interval="3m")
     )
 
-    reversion_params = backtest_reversion_alert(data)
-    trend_params = backtest_trend_alert(data)
-    price_range_params = backtest_price_range_test_alert(data)
-    volume_params = backtest_volume_anomaly_alert(data)
+    reversion_params = backtest_reversion_alert(data, min_signals=min_signals)
+    trend_params = backtest_trend_alert(data, min_signals=min_signals)
+    price_range_params = backtest_price_range_test_alert(data, min_signals=min_signals)
+    volume_params = backtest_volume_anomaly_alert(data, min_signals=min_signals)
     print(reversion_params)
     print(trend_params)
     print(price_range_params)
     print(volume_params)
+
+    test_data = parse_yahoo_data(
+        get_yahoo_finance_data("MNQ=F", lookback=691200, interval="3m", offset=351200)
+    )
+
+    all_results = test_all_alerts(test_data, forward_period=forward_period)

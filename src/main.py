@@ -875,17 +875,13 @@ async def main():
     while not is_bot_ready():
         await asyncio.sleep(0.2)
 
-    # Start main alert monitor (mean reversion, trend, range tests) - runs every 131 seconds
+    # Start main alert monitor (mean reversion, trend, range tests) - runs every 91 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="MNQ=F", interval_seconds=131
+        symbol="MNQ=F", interval_seconds=91
     )
 
-    console.print(
-        "[green]Alert monitor running in background thread (91s interval).[/green]"
-    )
-    console.print(
-        "[green]Volume monitor running in background thread (180s interval).[/green]"
-    )
+    console.print("[green]Alert monitor running in background thread.[/green]")
+
     console.print("[dim]Press Ctrl+C to stop...[/dim]")
 
     try:
