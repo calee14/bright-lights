@@ -22,8 +22,10 @@ import numpy as np
 
 console = Console()
 
+main_ticker = "QQQ"
 forward_period = 3
-min_signals = 20
+min_signals = 13
+train_splits = 3
 
 
 # Backtest the std_alert
@@ -116,8 +118,6 @@ def backtest_reversion_alert(
         f"[green]✓ std_alert complete! Best adjusted win rate: {best_win_rate:.2%} "
         f"(raw: {best_params.get('win_rate', 0):.2%}, {best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
-
-    save_params_to_json(best_params, "reversion_alert_params.json")
 
     return best_params
 
@@ -365,7 +365,6 @@ def backtest_trend_alert(
         f"(raw: {best_params.get('win_rate', 0):.2%}, {best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
 
-    save_params_to_json(best_params, "trend_alert_params.json")
     return best_params
 
 
@@ -373,7 +372,7 @@ def backtest_trend_alert(
 # algorithm to find best parameters
 def backtest_price_range_test_alert(
     data,
-    range_pct_range=np.arange(0.02, 0.2, 0.02),
+    range_pct_range=np.arange(0.01, 1.0, 0.1),
     min_tests_range=range(5, 30, 2),
     lookback_range=range(5, 25, 2),
     min_signals=5,
@@ -489,7 +488,6 @@ def backtest_price_range_test_alert(
         f"[green]✓ price_range_test_alert complete! Best win rate: {best_win_rate:.2%} ({best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
 
-    save_params_to_json(best_params, "price_range_test_alert_params.json")
     return best_params
 
 
@@ -591,8 +589,6 @@ def backtest_volume_anomaly_alert(
     console.print(
         f"[green]✓ volume_anomaly_alert complete! Best win rate: {best_win_rate:.2%} ({best_params.get('wins', 0)}/{best_params.get('signal_count', 0)})[/green]"
     )
-
-    save_params_to_json(best_params, "volume_anomaly_alert_params.json")
 
     return best_params
 
@@ -701,7 +697,7 @@ def test_reversion_alert(data, params, forward_period):
     total_return = 0
     signals = []
 
-    for i in range(0, len(data) - lookback + 1, 5):
+    for i in range(0, len(data) - lookback + 1, 3):
         window = data.iloc[i : i + lookback]
         signal = reversion_alert(window, std=std)
 
@@ -757,7 +753,7 @@ def test_trend_alert(data, params, forward_period):
     total_return = 0
     signals = []
 
-    for i in range(0, len(data) - n_candles + 1, 5):
+    for i in range(0, len(data) - n_candles + 1, 3):
         window = data.iloc[i : i + n_candles]
         signal = trend_alert(
             window,
@@ -827,7 +823,7 @@ def test_price_range_alert(data, params, forward_period):
     total_return = 0
     signals = []
 
-    for i in range(0, len(data) - lookback + 1, 5):
+    for i in range(0, len(data) - lookback + 1, 3):
         window = data.iloc[i : i + lookback]
         signal = price_range_test_alert(
             window,
@@ -898,7 +894,7 @@ def test_volume_alert(data, params, forward_period):
     total_return = 0
     signals = []
 
-    for i in range(0, len(data) - (n_candles * 2) + 1, 5):
+    for i in range(0, len(data) - (n_candles * 2) + 1, 3):
         window = data.iloc[i : i + (n_candles * 2)]
         signal = volume_anomaly_alert(window, threshold=threshold, n_candles=n_candles)
 
@@ -995,23 +991,248 @@ def display_results_table(all_results):
     console.print()
 
 
+def walk_forward_optimization(
+    data, backtest_func, param_ranges, n_splits=5, train_ratio=0.7
+):
+    """
+    Walk-forward optimization: train on one period, test on next period
+    """
+    data_len = len(data)
+    split_size = data_len // (n_splits + 1)
+
+    all_results = []
+
+    console.print(f"\n[bold cyan]Walk-Forward Analysis ({n_splits} splits)[/bold cyan]")
+
+    for split in range(n_splits):
+        train_start = split * split_size
+        train_end = train_start + int(split_size * train_ratio)
+        test_start = train_end
+        test_end = test_start + int(split_size * (1 - train_ratio))
+
+        if test_end > data_len:
+            break
+
+        train_data = data.iloc[train_start:train_end].copy()
+        test_data = data.iloc[test_start:test_end].copy()
+
+        console.print(f"\n[yellow]Split {split + 1}/{n_splits}:[/yellow]")
+        console.print(f"  Train: {len(train_data)} candles")
+        console.print(f"  Test:  {len(test_data)} candles")
+
+        # Optimize on training data
+        # backtest_func returns dict directly with all params AND metrics together
+        train_result = backtest_func(train_data, **param_ranges)
+
+        # Store the entire result
+        all_results.append(train_result)
+
+    # Average parameters weighted by performance
+    return average_parameters(all_results)
+
+
+def create_default_params(func_name):
+    """Create default parameters when backtesting fails"""
+    defaults = {
+        "backtest_reversion_alert": {
+            "lookback": 10,
+            "std": 2.0,
+            "wins": 0,
+            "losses": 0,
+            "signal_count": 0,
+            "win_rate": 0.0,
+            "adjusted_win_rate": 0.0,
+            "total_return": 0.0,
+            "avg_return": 0.0,
+        },
+        "backtest_trend_alert": {
+            "threshold": 0.95,
+            "n_candles": 7,
+            "decay_rate": 0.85,
+            "roc_weight": 0.2,
+            "volume_weight": 0.2,
+            "wins": 0,
+            "losses": 0,
+            "signal_count": 0,
+            "win_rate": 0.0,
+            "adjusted_win_rate": 0.0,
+            "total_return": 0.0,
+            "avg_return": 0.0,
+        },
+        "backtest_price_range_test_alert": {
+            "range_pct": 0.1,
+            "min_tests": 15,
+            "lookback": 15,
+            "wins": 0,
+            "losses": 0,
+            "signal_count": 0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "avg_return": 0.0,
+        },
+        "backtest_volume_anomaly_alert": {
+            "threshold": 3.0,
+            "n_candles": 7,
+            "wins": 0,
+            "losses": 0,
+            "signal_count": 0,
+            "win_rate": 0.0,
+            "total_return": 0.0,
+            "avg_return": 0.0,
+        },
+    }
+
+    return defaults.get(func_name, {})
+
+
+def average_parameters(results):
+    """
+    Average parameters across splits, weighted by performance.
+    """
+    if not results:
+        console.print("[yellow]Warning: No results to average[/yellow]")
+        return {}
+
+    # Keys that are metrics (not parameters to average)
+    metric_keys = {
+        "wins",
+        "losses",
+        "signal_count",
+        "win_rate",
+        "adjusted_win_rate",
+        "total_return",
+        "avg_return",
+    }
+
+    # Get parameter keys (everything that's NOT a metric)
+    all_keys = results[0].keys()
+    param_keys = [k for k in all_keys if k not in metric_keys]
+
+    console.print(f"\n[cyan]Averaging parameters: {param_keys}[/cyan]")
+
+    averaged = {}
+
+    # Calculate weights (use adjusted_win_rate if available, else win_rate)
+    weights = []
+    for r in results:
+        weight = r.get("adjusted_win_rate", r.get("win_rate", 0))
+        weights.append(max(weight, 0))  # Ensure non-negative
+
+    total_weight = sum(weights)
+
+    if total_weight == 0 or len(results) == 0:
+        console.print(
+            "[yellow]Warning: All weights are zero, using simple average[/yellow]"
+        )
+        # Fall back to simple average
+        for key in param_keys:
+            values = [r.get(key, 0) for r in results]  # Use .get() with default
+            averaged[key] = np.mean(values) if values else 0
+    else:
+        # Weighted average
+        for key in param_keys:
+            weighted_sum = sum(
+                r.get(key, 0) * weights[i] for i, r in enumerate(results)
+            )
+            averaged[key] = weighted_sum / total_weight
+
+    # Round integer parameters
+    int_params = ["lookback", "n_candles", "min_tests"]
+    for key in int_params:
+        if key in averaged:
+            averaged[key] = int(round(averaged[key]))
+
+    # Add stability metrics with safe defaults
+    win_rates = [r.get("win_rate", 0) for r in results]
+    averaged["avg_win_rate"] = np.mean(win_rates) if win_rates else 0.0
+    averaged["std_win_rate"] = np.std(win_rates) if len(win_rates) > 1 else 0.0
+    averaged["stability_score"] = averaged["avg_win_rate"] - averaged["std_win_rate"]
+
+    # Store individual results for reference
+    averaged["split_results"] = results
+
+    console.print(f"\n[green]✓ Walk-Forward Complete:[/green]")
+    console.print(f"  Average Win Rate: {averaged['avg_win_rate']:.2%}")
+    console.print(f"  Consistency (±): {averaged['std_win_rate']:.2%}")
+    console.print(f"  Stability Score: {averaged['stability_score']:.2%}")
+
+    # Show averaged parameter values
+    console.print(f"\n[green]Averaged Parameters:[/green]")
+    for key in param_keys:
+        if isinstance(averaged.get(key), float):
+            console.print(f"  {key}: {averaged[key]:.4f}")
+        else:
+            console.print(f"  {key}: {averaged.get(key, 'N/A')}")
+
+    return averaged
+
+
 if __name__ == "__main__":
     # Get data from past 8 days (691200 seconds)
     data = parse_yahoo_data(
-        get_yahoo_finance_data("MNQ=F", lookback=691200, interval="3m")
+        get_yahoo_finance_data(main_ticker, lookback=691200, interval="3m", offset=0)
     )
 
     reversion_params = backtest_reversion_alert(data, min_signals=min_signals)
-    trend_params = backtest_trend_alert(data, min_signals=min_signals)
-    price_range_params = backtest_price_range_test_alert(data, min_signals=min_signals)
-    volume_params = backtest_volume_anomaly_alert(data, min_signals=min_signals)
-    print(reversion_params)
-    print(trend_params)
-    print(price_range_params)
-    print(volume_params)
-
-    test_data = parse_yahoo_data(
-        get_yahoo_finance_data("MNQ=F", lookback=691200, interval="3m", offset=351200)
+    reversion_params = walk_forward_optimization(
+        data=data,
+        backtest_func=backtest_reversion_alert,
+        param_ranges={
+            "lookback_range": range(6, 15, 1),
+            "std_range": np.arange(1.5, 10.0, 0.2),
+        },
+        n_splits=train_splits,
+    )
+    # trend_params = backtest_trend_alert(data, min_signals=min_signals)
+    trend_params = walk_forward_optimization(
+        data=data,
+        backtest_func=backtest_trend_alert,
+        param_ranges={
+            "threshold_range": np.arange(0.9, 0.99, 0.02),
+            "n_candles_range": range(3, 13, 2),
+            "decay_rate_range": np.arange(0.80, 0.95, 0.05),
+            "roc_weight_range": np.arange(0.1, 0.33, 0.08),
+            "volume_weight_range": np.arange(0.1, 0.33, 0.08),
+            "forward_period": 5,
+            "use_multiprocessing": True,
+        },
+        n_splits=train_splits,
+    )
+    # price_range_params = backtest_price_range_test_alert(data, min_signals=min_signals)
+    price_range_params = walk_forward_optimization(
+        data=data,
+        backtest_func=backtest_price_range_test_alert,
+        param_ranges={
+            "range_pct_range": np.arange(0.02, 0.2, 0.02),
+            "min_tests_range": range(5, 30, 2),
+            "lookback_range": range(5, 25, 2),
+        },
+        n_splits=train_splits,
+    )
+    # volume_params = backtest_volume_anomaly_alert(data, min_signals=min_signals)
+    volume_params = walk_forward_optimization(
+        data=data,
+        backtest_func=backtest_volume_anomaly_alert,
+        param_ranges={
+            "threshold_range": np.arange(1.5, 8, 0.2),
+            "n_candles_range": range(3, 13, 1),
+        },
+        n_splits=train_splits,
     )
 
-    all_results = test_all_alerts(test_data, forward_period=forward_period)
+    save_params_to_json(reversion_params, "reversion_alert_params.json")
+    save_params_to_json(trend_params, "trend_alert_params.json")
+    save_params_to_json(price_range_params, "price_range_test_alert_params.json")
+    save_params_to_json(volume_params, "volume_anomaly_alert_params.json")
+    # print(reversion_params)
+    # print(trend_params)
+    # print(price_range_params)
+    # print(volume_params)
+
+    test_data = parse_yahoo_data(
+        get_yahoo_finance_data(main_ticker, lookback=691200, interval="3m", offset=0)
+    )
+
+    all_results = test_all_alerts(test_data, forward_period=1)
+    all_results = test_all_alerts(test_data, forward_period=3)
+    all_results = test_all_alerts(test_data, forward_period=5)

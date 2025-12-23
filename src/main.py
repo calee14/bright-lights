@@ -23,6 +23,7 @@ import asyncio
 
 
 console = Console()
+main_ticker = "QQQ"  # "MNQ=F"
 
 
 def reversion_alert(data, std=2.0, lookback=8):
@@ -674,9 +675,19 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
-    if range_test_signal and (
-        range_test_signal["urgency"] == "CRITICAL"
-        or range_test_signal["level_type"] != "MIXED"
+    if (
+        range_test_signal
+        and range_test_signal["level_type"] != "MIXED"
+        and (
+            (
+                range_test_signal["level_type"] == "RESISTANCE"
+                and range_test_signal["position"] == "BELOW"
+            )
+            or (
+                range_test_signal["level_type"] == "SUPPORT"
+                and range_test_signal["position"] == "ABOVE"
+            )
+        )
     ):
         # Color coding based on urgency
         urgency_colors = {
@@ -763,7 +774,7 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
-    if volume_signal:
+    if volume_signal and volume_signal["interpretation"] != "UNCLEAR":
         console.print("\n[bold yellow]🔔 VOLUME TREND ALERT![/bold yellow]")
         console.print(
             f"[dim]Time: {volume_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
@@ -877,7 +888,7 @@ async def main():
 
     # Start main alert monitor (mean reversion, trend, range tests) - runs every 91 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
-        symbol="MNQ=F", interval_seconds=91
+        symbol=main_ticker, interval_seconds=301
     )
 
     console.print("[green]Alert monitor running in background thread.[/green]")
