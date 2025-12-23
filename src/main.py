@@ -717,36 +717,17 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
 
         console.print(f"Volume Ratio: {range_test_signal['volume_ratio']:.2f}x average")
 
-        # Actionable interpretation
-        action_text = ""
-        if (
-            range_test_signal["level_type"] == "RESISTANCE"
-            and range_test_signal["position"] == "BELOW"
-        ):
-            if range_test_signal["urgency"] in ["CRITICAL", "HIGH"]:
-                action_msg = (
-                    "💡 Watch for breakout ABOVE resistance - potential LONG setup"
-                )
-                console.print(f"[green]{action_msg}[/green]")
-                action_text = f"\n{action_msg}"
-            else:
-                action_msg = "💡 Monitor for rejection or breakout"
-                console.print(f"[yellow]{action_msg}[/yellow]")
-                action_text = f"\n{action_msg}"
-        elif (
-            range_test_signal["level_type"] == "SUPPORT"
-            and range_test_signal["position"] == "ABOVE"
-        ):
-            if range_test_signal["urgency"] in ["CRITICAL", "HIGH"]:
-                action_msg = (
-                    "💡 Watch for breakdown BELOW support - potential SHORT setup"
-                )
-                console.print(f"[red]{action_msg}[/red]")
-                action_text = f"\n{action_msg}"
-            else:
-                action_msg = "💡 Monitor for bounce or breakdown"
-                console.print(f"[yellow]{action_msg}[/yellow]")
-                action_text = f"\n{action_msg}"
+        # Neutral interpretation - no directional bias
+        if range_test_signal["level_type"] == "RESISTANCE":
+            action_msg = (
+                "💡 Key resistance being tested - watch for breakout OR rejection"
+            )
+            console.print(f"[yellow]{action_msg}[/yellow]")
+            action_text = f"\n{action_msg}"
+        elif range_test_signal["level_type"] == "SUPPORT":
+            action_msg = "💡 Key support being tested - watch for bounce OR breakdown"
+            console.print(f"[yellow]{action_msg}[/yellow]")
+            action_text = f"\n{action_msg}"
 
         # Send to Discord
         accelerating_text = ""
