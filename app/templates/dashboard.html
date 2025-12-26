@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Market Alerts</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            /* Vercel-inspired minimal palette */
+            --background: #fafafa;
+            --foreground: #171717;
+            --border: #e5e5e5;
+            --border-hover: #d4d4d4;
+            --muted: #737373;
+            --card: #ffffff;
+            --accent: #0070f3;
+            --success: #0070f0;
+            --warning: #f5a623;
+            --danger: #e00;
+            --chart-bg: #fcfcfc;
+            
+            /* Spacing scale */
+            --space-1: 4px;
+            --space-2: 8px;
+            --space-3: 12px;
+            --space-4: 16px;
+            --space-5: 24px;
+            --space-6: 32px;
+            --space-7: 48px;
+            --space-8: 64px;
+            
+            /* Typography */
+            --font-sans: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-serif: 'Instrument Serif', Georgia, serif;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --background: #000000;
+                --foreground: #ededed;
+                --border: #2a2a2a;
+                --border-hover: #3a3a3a;
+                --muted: #a3a3a3;
+                --card: #0a0a0a;
+                --chart-bg: #111;
+            }
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--background);
+            color: var(--foreground);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: var(--space-8) var(--space-5);
+        }
+
+        /* Header */
+        header {
+            margin-bottom: var(--space-8);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        h1 {
+            font-family: var(--font-serif);
+            font-size: 2.5rem;
+            font-weight: 400;
+            letter-spacing: -0.03em;
+            font-style: italic;
+            margin-bottom: var(--space-2);
+        }
+
+        .subtitle {
+            font-size: 0.875rem;
+            color: var(--muted);
+            font-weight: 400;
+            letter-spacing: -0.01em;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            padding: var(--space-2) var(--space-3);
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            transition: border-color 0.2s ease;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main layout */
+        .overview-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: var(--space-4);
+            margin-bottom: var(--space-6);
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: var(--space-6);
+            margin-bottom: var(--space-6);
+        }
+
+        /* Card component */
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: var(--space-6);
+            transition: border-color 0.2s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+        }
+
+        .card-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin-bottom: var(--space-4);
+            font-weight: 600;
+        }
+
+        /* Chart */
+        .chart-container {
+            position: relative;
+        }
+
+        #chart-image {
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--chart-bg);
+            display: block;
+        }
+
+        #chart-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 400px;
+            color: var(--muted);
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border);
+            border-top-color: var(--foreground);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Sidebar stats */
+        .stats {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-4);
+        }
+
+        .stat {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-1);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: var(--space-4) 0;
+        }
+
+        /* Recent Signal Banner */
+        .recent-signal-banner {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: var(--space-5);
+            margin-bottom: var(--space-6);
+            position: sticky;
+            top: var(--space-4);
+            z-index: 100;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            transition: all 0.3s ease;
+        }
+
+        .recent-signal-banner:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+        }
+
+        .recent-signal-banner.has-alert {
+            border-left: 3px solid var(--accent);
+        }
+
+        .recent-signal-banner.has-alert.reversion {
+            border-left-color: var(--danger);
+        }
+
+        .recent-signal-banner.has-alert.trend {
+            border-left-color: var(--success);
+        }
+
+        .recent-signal-banner.has-alert.range {
+            border-left-color: var(--warning);
+        }
+
+        .recent-signal-banner.has-alert.volume {
+            border-left-color: var(--accent);
+        }
+
+        .recent-signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--space-3);
+        }
+
+        .recent-signal-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            font-weight: 600;
+        }
+
+        .recent-signal-time {
+            font-size: 0.75rem;
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .recent-signal-content {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: var(--space-4);
+        }
+
+        .recent-signal-item {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-1);
+        }
+
+        .recent-signal-label {
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+
+        .recent-signal-value {
+            font-size: 1.125rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .no-recent-signal {
+            text-align: center;
+            color: var(--muted);
+            padding: var(--space-3) 0;
+            font-size: 0.875rem;
+        }
+
+        /* Alerts section */
+        .alerts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: var(--space-4);
+        }
+
+        /* Alert card */
+        .alert {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: var(--space-5);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.2s ease;
+            opacity: 0;
+            animation: fadeInUp 0.4s ease forwards;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .alert:hover {
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+
+        .alert::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 3px;
+            height: 100%;
+            background: var(--accent);
+        }
+
+        .alert.reversion::before { background: var(--danger); }
+        .alert.trend::before { background: var(--success); }
+        .alert.range::before { background: var(--warning); }
+        .alert.volume::before { background: var(--accent); }
+
+        .alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: var(--space-4);
+        }
+
+        .alert-type {
+            font-size: 0.875rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .alert-time {
+            font-size: 0.75rem;
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .alert-details {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-3);
+        }
+
+        .alert-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 0.8125rem;
+        }
+
+        .alert-label {
+            color: var(--muted);
+        }
+
+        .alert-value {
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Empty state */
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: var(--space-8);
+            color: var(--muted);
+        }
+
+        .empty-state-icon {
+            font-size: 2rem;
+            margin-bottom: var(--space-3);
+            opacity: 0.5;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: var(--space-6) var(--space-4);
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .alerts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .main-grid {
+                gap: var(--space-5);
+            }
+        }
+
+        /* Subtle animations */
+        .card, .alert {
+            will-change: transform;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Market Alerts</h1>
+                <p class="subtitle">Real-time trading signals</p>
+            </div>
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span id="connection-status">Live</span>
+            </div>
+        </header>
+
+        <!-- Overview Bar -->
+        <div class="overview-bar">
+            <div class="card">
+                <h2 class="card-title">Symbol</h2>
+                <div class="stat-value" id="symbol">QQQ</div>
+            </div>
+            <div class="card">
+                <h2 class="card-title">Last Update</h2>
+                <div class="stat-value" id="last-update" style="font-size: 1.125rem;">--:--:--</div>
+            </div>
+            <div class="card">
+                <h2 class="card-title">Active Alerts</h2>
+                <div class="stat-value" id="alert-count">0</div>
+            </div>
+        </div>
+
+        <!-- Recent Signal Banner - Sticky at top -->
+        <div class="recent-signal-banner" id="recent-signal-banner">
+            <div class="recent-signal-header">
+                <div class="recent-signal-title">Most Recent Signal</div>
+                <div class="recent-signal-time" id="recent-signal-time">—</div>
+            </div>
+            <div class="recent-signal-content" id="recent-signal-content">
+                <div class="no-recent-signal">No signals yet</div>
+            </div>
+        </div>
+
+        <!-- Chart -->
+        <div class="main-grid">
+            <div class="card chart-container">
+                <h2 class="card-title">Chart</h2>
+                <div id="chart-loading">
+                    <div class="spinner"></div>
+                </div>
+                <img id="chart-image" src="" alt="Market Chart" style="display: none;">
+            </div>
+        </div>
+
+        <!-- All Alerts -->
+        <div class="alerts-grid" id="alerts-container">
+            <div class="empty-state">
+                <div class="empty-state-icon">—</div>
+                <div>Monitoring markets...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket connection
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        
+        const elements = {
+            status: document.getElementById('connection-status'),
+            chartImg: document.getElementById('chart-image'),
+            chartLoading: document.getElementById('chart-loading'),
+            alertsContainer: document.getElementById('alerts-container'),
+            lastUpdate: document.getElementById('last-update'),
+            alertCount: document.getElementById('alert-count'),
+            recentSignalBanner: document.getElementById('recent-signal-banner'),
+            recentSignalTime: document.getElementById('recent-signal-time'),
+            recentSignalContent: document.getElementById('recent-signal-content')
+        };
+
+        // Store alerts
+        let activeAlerts = {
+            reversion: null,
+            trend: null,
+            range: null,
+            volume: null
+        };
+
+        // Track most recent alert
+        let mostRecentAlert = null;
+
+        // WebSocket handlers
+        ws.onopen = () => {
+            console.log('Connected');
+            elements.status.textContent = 'Live';
+            loadInitialData();
+        };
+
+        ws.onclose = () => {
+            console.log('Disconnected');
+            elements.status.textContent = 'Offline';
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'chart_update') {
+                updateChart(data.image);
+            } else if (data.type === 'alert_update') {
+                handleAlertUpdate(data);
+            }
+        };
+
+        function handleAlertUpdate(data) {
+            // Update the specific alert type
+            if (data.alert_type) {
+                activeAlerts[data.alert_type] = data.data;
+                
+                // Update most recent alert
+                mostRecentAlert = {
+                    type: data.alert_type,
+                    data: data.data,
+                    timestamp: data.data.timestamp || new Date().toISOString()
+                };
+                
+                updateRecentSignal();
+            }
+            renderAlerts();
+            updateTimestamp();
+        }
+
+        function updateRecentSignal() {
+            if (!mostRecentAlert) {
+                elements.recentSignalContent.innerHTML = '<div class="no-recent-signal">No signals yet</div>';
+                elements.recentSignalBanner.className = 'recent-signal-banner';
+                elements.recentSignalTime.textContent = '—';
+                return;
+            }
+
+            const { type, data } = mostRecentAlert;
+            
+            // Update banner styling
+            elements.recentSignalBanner.className = `recent-signal-banner has-alert ${type}`;
+            elements.recentSignalTime.textContent = formatTime(data.timestamp);
+
+            // Get alert-specific details
+            const details = getRecentSignalDetails(type, data);
+            
+            // Render signal details
+            elements.recentSignalContent.innerHTML = details.map(d => `
+                <div class="recent-signal-item">
+                    <span class="recent-signal-label">${d.label}</span>
+                    <span class="recent-signal-value">${d.value}</span>
+                </div>
+            `).join('');
+        }
+
+        function getRecentSignalDetails(type, data) {
+            const typeNames = {
+                reversion: 'Mean Reversion',
+                trend: 'Trend Signal',
+                range: 'Range Test',
+                volume: 'Volume Anomaly'
+            };
+
+            const baseName = { label: 'Type', value: typeNames[type] };
+
+            switch(type) {
+                case 'reversion':
+                    return [
+                        baseName,
+                        { label: 'Direction', value: data.direction },
+                        { label: 'Price', value: `$${data.current_price.toFixed(2)}` },
+                        { label: 'Deviation', value: `${data.deviation.toFixed(2)}σ` }
+                    ];
+                case 'trend':
+                    return [
+                        baseName,
+                        { label: 'Direction', value: data.direction },
+                        { label: 'Strength', value: data.strength },
+                        { label: 'Ratio', value: `${(data.ratio * 100).toFixed(1)}%` }
+                    ];
+                case 'range':
+                    return [
+                        baseName,
+                        { label: 'Level', value: data.level_type },
+                        { label: 'Price', value: `$${data.level_price.toFixed(2)}` },
+                        { label: 'Tests', value: data.num_tests }
+                    ];
+                case 'volume':
+                    return [
+                        baseName,
+                        { label: 'Direction', value: data.volume_direction },
+                        { label: 'Signal', value: data.interpretation },
+                        { label: 'Ratio', value: `${data.volume_ratio}x` }
+                    ];
+                default:
+                    return [baseName];
+            }
+        }
+
+        function updateChart(imageData) {
+            elements.chartImg.src = imageData;
+            elements.chartImg.style.display = 'block';
+            elements.chartLoading.style.display = 'none';
+        }
+
+        function renderAlerts() {
+            elements.alertsContainer.innerHTML = '';
+            let count = 0;
+
+            const alertTypes = [
+                { key: 'reversion', name: 'Mean Reversion' },
+                { key: 'trend', name: 'Trend Signal' },
+                { key: 'range', name: 'Range Test' },
+                { key: 'volume', name: 'Volume Anomaly' }
+            ];
+
+            alertTypes.forEach(({ key, name }) => {
+                const alert = activeAlerts[key];
+                if (alert) {
+                    elements.alertsContainer.appendChild(createAlertCard(key, name, alert));
+                    count++;
+                }
+            });
+
+            if (count === 0) {
+                elements.alertsContainer.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">—</div>
+                        <div>No active alerts</div>
+                    </div>
+                `;
+            }
+
+            elements.alertCount.textContent = count;
+        }
+
+        function createAlertCard(type, name, data) {
+            const card = document.createElement('div');
+            card.className = `alert ${type}`;
+            
+            const details = getAlertDetails(type, data);
+            
+            card.innerHTML = `
+                <div class="alert-header">
+                    <div class="alert-type">${name}</div>
+                    <div class="alert-time">${formatTime(data.timestamp)}</div>
+                </div>
+                <div class="alert-details">
+                    ${details.map(d => `
+                        <div class="alert-row">
+                            <span class="alert-label">${d.label}</span>
+                            <span class="alert-value">${d.value}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            return card;
+        }
+
+        function getAlertDetails(type, data) {
+            switch(type) {
+                case 'reversion':
+                    return [
+                        { label: 'Direction', value: data.direction },
+                        { label: 'Price', value: `$${data.current_price.toFixed(2)}` },
+                        { label: 'Deviation', value: `${data.deviation.toFixed(2)}σ` },
+                        { label: 'Volume', value: `${data.volume_ratio.toFixed(2)}x` }
+                    ];
+                case 'trend':
+                    return [
+                        { label: 'Direction', value: data.direction },
+                        { label: 'Strength', value: data.strength },
+                        { label: 'Ratio', value: `${(data.ratio * 100).toFixed(1)}%` },
+                        { label: 'Momentum', value: data.momentum }
+                    ];
+                case 'range':
+                    return [
+                        { label: 'Level', value: data.level_type },
+                        { label: 'Price', value: `$${data.level_price.toFixed(2)}` },
+                        { label: 'Tests', value: data.num_tests },
+                        { label: 'Urgency', value: data.urgency }
+                    ];
+                case 'volume':
+                    return [
+                        { label: 'Direction', value: data.volume_direction },
+                        { label: 'Signal', value: data.interpretation },
+                        { label: 'Ratio', value: `${data.volume_ratio}x` },
+                        { label: 'Confidence', value: data.confidence }
+                    ];
+                default:
+                    return [];
+            }
+        }
+
+        function formatTime(timestamp) {
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false 
+            });
+        }
+
+        function updateTimestamp() {
+            const now = new Date();
+            elements.lastUpdate.textContent = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+        }
+
+        // Load initial data
+        async function loadInitialData() {
+            try {
+                // Load chart
+                const chartResponse = await fetch('/api/chart');
+                const chartData = await chartResponse.json();
+                if (chartData.image) {
+                    updateChart(chartData.image);
+                }
+
+                // Load alerts
+                const alertsResponse = await fetch('/api/alerts');
+                const alertsData = await alertsResponse.json();
+                if (alertsData && !alertsData.error) {
+                    activeAlerts = {
+                        reversion: alertsData.reversion_signal,
+                        trend: alertsData.trend_signal,
+                        range: alertsData.range_test_signal,
+                        volume: alertsData.volume_signal
+                    };
+                    
+                    // Find most recent alert from initial data
+                    const allAlerts = [];
+                    if (alertsData.reversion_signal) allAlerts.push({ type: 'reversion', data: alertsData.reversion_signal });
+                    if (alertsData.trend_signal) allAlerts.push({ type: 'trend', data: alertsData.trend_signal });
+                    if (alertsData.range_test_signal) allAlerts.push({ type: 'range', data: alertsData.range_test_signal });
+                    if (alertsData.volume_signal) allAlerts.push({ type: 'volume', data: alertsData.volume_signal });
+                    
+                    if (allAlerts.length > 0) {
+                        // Sort by timestamp to get most recent
+                        allAlerts.sort((a, b) => {
+                            const timeA = new Date(a.data.timestamp || 0);
+                            const timeB = new Date(b.data.timestamp || 0);
+                            return timeB - timeA;
+                        });
+                        
+                        mostRecentAlert = {
+                            type: allAlerts[0].type,
+                            data: allAlerts[0].data,
+                            timestamp: allAlerts[0].data.timestamp
+                        };
+                        updateRecentSignal();
+                    }
+                    
+                    renderAlerts();
+                    updateTimestamp();
+                }
+            } catch (error) {
+                console.error('Error loading data:', error);
+            }
+        }
+
+        // Update time every second
+        setInterval(updateTimestamp, 1000);
+    </script>
+</body>
+</html>
