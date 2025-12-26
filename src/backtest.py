@@ -25,7 +25,7 @@ console = Console()
 main_ticker = "QQQ"
 forward_period = 3
 min_signals = 13
-train_splits = 3
+train_splits = 2
 
 
 # Backtest the std_alert
