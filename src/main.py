@@ -25,6 +25,9 @@ import asyncio
 console = Console()
 main_ticker = "QQQ"  # "MNQ=F"
 
+active_reversion_alert = None
+reversion_alert_timer = None
+
 
 def reversion_alert(data, std=2.0, lookback=8):
     """
@@ -615,6 +618,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
     Dislay alerts in terminal
     and on Discord
     """
+    global active_reversion_alert, reversion_alert_timer
+
     if alerts is None:
         return
 
@@ -624,29 +629,55 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
     volume_signal = alerts.get("volume_signal")
 
     if reversion_signal:
-        console.print("\n[bold red]🔔 MEAN REVERSION ALERT![/bold red]")
-        console.print(
-            f"[dim]Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
-        )
-        console.print(f"Direction: {reversion_signal['direction']}")
-        console.print(f"Current Price: ${reversion_signal['current_price']:.2f}")
-        console.print(f"Mean: ${reversion_signal['mean']:.2f}")
-        console.print(
-            f"Deviation: {reversion_signal['deviation']:.2f} standard deviations"
-        )
-        console.print(f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average")
+        if (
+            active_reversion_alert is None
+            or active_reversion_alert["direction"] != reversion_signal["direction"]
+        ):
+            if reversion_alert_timer is not None:
+                reversion_alert_timer.cancel()
 
-        # Send to Discord
-        discord_msg = (
-            f"🔔 **MEAN REVERSION ALERT!**\n"
-            f"Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}\n"
-            f"Direction: {reversion_signal['direction']}\n"
-            f"Current Price: ${reversion_signal['current_price']:.2f}\n"
-            f"Mean: ${reversion_signal['mean']:.2f}\n"
-            f"Deviation: {reversion_signal['deviation']:.2f} standard deviations\n"
-            f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average"
-        )
-        message_queue.put(discord_msg)
+            def delayed_reversion_alert():
+                global active_reversion_alert, reversion_alert_timer
+
+                console.print("\n[bold red]🔔 MEAN REVERSION ALERT![/bold red]")
+                console.print(
+                    f"[dim]Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}[/dim]"
+                )
+                console.print(f"Direction: {reversion_signal['direction']}")
+                console.print(
+                    f"Current Price: ${reversion_signal['current_price']:.2f}"
+                )
+                console.print(f"Mean: ${reversion_signal['mean']:.2f}")
+                console.print(
+                    f"Deviation: {reversion_signal['deviation']:.2f} standard deviations"
+                )
+                console.print(
+                    f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average"
+                )
+
+                # Send to Discord
+                discord_msg = (
+                    f"🔔 **MEAN REVERSION ALERT!**\n"
+                    f"Time: {reversion_signal['timestamp'].strftime('%H:%M:%S')}\n"
+                    f"Direction: {reversion_signal['direction']}\n"
+                    f"Current Price: ${reversion_signal['current_price']:.2f}\n"
+                    f"Mean: ${reversion_signal['mean']:.2f}\n"
+                    f"Deviation: {reversion_signal['deviation']:.2f} standard deviations\n"
+                    f"Volume Ratio: {reversion_signal['volume_ratio']:.2f}x average"
+                )
+                message_queue.put(discord_msg)
+
+                # Clear the timer reference after it fires
+                reversion_alert_timer = None
+
+            # Start a timer thread to execute after 5 minutes (300 seconds)
+            reversion_alert_timer = threading.Timer(180.0, delayed_reversion_alert)
+            reversion_alert_timer.daemon = True
+            reversion_alert_timer.start()
+
+            active_reversion_alert = reversion_signal
+    else:
+        active_reversion_alert = None
 
     if trend_signal:
         console.print("\n[bold green]🔔 TREND ALERT![/bold green]")
@@ -827,7 +858,7 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol, interval="3m", offset=0)
+        alerts = check_alerts(symbol=symbol, interval="3m", offset=121700)
 
         if alerts:
             display_alerts(alerts)
