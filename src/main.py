@@ -19,6 +19,7 @@ from rich.markdown import Markdown
 from rich.console import Console
 from datetime import datetime
 from threading import Event
+from src.util.dashboard_ws import send_to_dashboard
 import asyncio
 
 
@@ -667,6 +668,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
                 )
                 message_queue.put(discord_msg)
 
+                send_to_dashboard("reversion", reversion_signal)
+
                 # Clear the timer reference after it fires
                 reversion_alert_timer = None
 
@@ -705,6 +708,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
             f"Red Score: {trend_signal['red_score']:.2f}"
         )
         message_queue.put(discord_msg)
+
+        send_to_dashboard("trend", trend_signal)
 
     if (
         range_test_signal
@@ -786,6 +791,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
+        send_to_dashboard("range", range_test_signal)
+
     if volume_signal and volume_signal["interpretation"] != "UNCLEAR":
         console.print("\n[bold yellow]🔔 VOLUME TREND ALERT![/bold yellow]")
         console.print(
@@ -839,6 +846,8 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
         )
         message_queue.put(discord_msg)
 
+        send_to_dashboard("volume", volume_signal)
+
 
 def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
     """
@@ -858,7 +867,7 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol, interval="3m", offset=121700)
+        alerts = check_alerts(symbol=symbol, interval="3m", offset=133000)
 
         if alerts:
             display_alerts(alerts)

@@ -9,7 +9,7 @@ import io
 matplotlib.use("Agg")
 
 
-def plot_recent_candlesticks(df, last_n_periods=60, filename=None):
+def plot_recent_candlesticks(df, last_n_periods=60, filename=None, dark_mode=True):
     # Make sure datetime is the index and is datetime type
     if "Datetime" in df.columns:
         df = df.set_index("Datetime")
@@ -17,30 +17,63 @@ def plot_recent_candlesticks(df, last_n_periods=60, filename=None):
     # Sort by datetime and get the most recent periods
     df = df.sort_index()
     df = df.tail(last_n_periods)
-    up_color = "#089981"
-    down_color = "#f33745"
-    # Define style
-    style = mpf.make_mpf_style(
-        marketcolors=mpf.make_marketcolors(
-            up=up_color,
-            down=down_color,
-            volume={"up": up_color, "down": down_color},
-            edge="inherit",
-        ),
-        gridstyle="--",
-        gridcolor="grey",
-        rc={"grid.alpha": 0.3},
-    )
 
-    # OPTIMIZATION 1: Reduce figure size (smaller dimensions = fewer tokens)
-    # Changed from (12, 8) to (10, 6) - still readable but 37.5% fewer pixels
+    if dark_mode:
+        # Dark mode colors
+        bg_color = "#1a1a1a"  # Deep dark gray (not pitch black)
+        up_color = "#26a69a"  # Teal green for up candles
+        down_color = "#ef5350"  # Red for down candles
+        text_color = "#ffffff"  # White text
+        grid_color = "#404040"  # Lighter gray for grid
+
+        style = mpf.make_mpf_style(
+            base_mpf_style="nightclouds",  # Start with dark base
+            marketcolors=mpf.make_marketcolors(
+                up=up_color,
+                down=down_color,
+                volume={"up": up_color, "down": down_color},
+                edge="inherit",
+                wick={"up": up_color, "down": down_color},
+            ),
+            gridstyle="--",
+            gridcolor=grid_color,
+            facecolor=bg_color,
+            edgecolor=bg_color,
+            figcolor=bg_color,
+            rc={
+                "grid.alpha": 0.3,
+                "text.color": text_color,
+                "axes.labelcolor": text_color,
+                "xtick.color": text_color,
+                "ytick.color": text_color,
+                "axes.edgecolor": grid_color,
+                "axes.facecolor": bg_color,
+                "figure.facecolor": bg_color,
+            },
+        )
+    else:
+        # Original light mode
+        up_color = "#089981"
+        down_color = "#f33745"
+        style = mpf.make_mpf_style(
+            marketcolors=mpf.make_marketcolors(
+                up=up_color,
+                down=down_color,
+                volume={"up": up_color, "down": down_color},
+                edge="inherit",
+            ),
+            gridstyle="--",
+            gridcolor="grey",
+            rc={"grid.alpha": 0.3},
+        )
+
     kwargs = {
         "type": "candle",
         "volume": True,
         "style": style,
         "ylabel": "Price",
         "ylabel_lower": "Volume",
-        "figsize": (10, 6),  # Reduced from (12, 8)
+        "figsize": (10, 6),
         "panel_ratios": (3, 1),
         "returnfig": True,
         "tight_layout": False,
@@ -56,37 +89,32 @@ def plot_recent_candlesticks(df, last_n_periods=60, filename=None):
         ax.yaxis.set_ticks_position("right")
 
     if filename:
-        # OPTIMIZATION 2: Reduce DPI from 130 to 95
-        # This maintains readability while reducing file size significantly
-        # 95 DPI gives you 950x570 pixels (vs 1560x1040 at 130 DPI)
-
-        # Save to temporary buffer first
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=95, bbox_inches="tight")
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=130,
+            bbox_inches="tight",
+            facecolor=bg_color if dark_mode else "white",
+        )
         buf.seek(0)
 
-        # OPTIMIZATION 3: Compress the image further
         img = Image.open(buf)
-
-        # Optional: Convert to RGB if needed (removes alpha channel)
         if img.mode == "RGBA":
             img = img.convert("RGB")
 
-        # Save with optimized compression
-        # Quality 85 is a sweet spot - minimal visual difference but good compression
-        img.save(filename, "JPEG", quality=85, optimize=True)
-
+        img.save(filename, "JPEG", quality=95, optimize=True)
         buf.close()
         plt.close(fig)
 
     return fig
 
 
-def plot_recent_candlesticks_minimal(df, last_n_periods=60, filename=None):
+def plot_recent_candlesticks_minimal(
+    df, last_n_periods=60, filename=None, dark_mode=True
+):
     """
-    Ultra-optimized version for maximum token savings.
-    Use this if you want even more aggressive optimization.
-    ~60-70% smaller file size than original.
+    Ultra-optimized version with dark mode support
     """
     if "Datetime" in df.columns:
         df = df.set_index("Datetime")
@@ -94,29 +122,60 @@ def plot_recent_candlesticks_minimal(df, last_n_periods=60, filename=None):
     df = df.sort_index()
     df = df.tail(last_n_periods)
 
-    up_color = "#089981"
-    down_color = "#f33745"
+    if dark_mode:
+        bg_color = "#1a1a1a"
+        up_color = "#26a69a"
+        down_color = "#ef5350"
+        text_color = "#ffffff"
+        grid_color = "#404040"
 
-    style = mpf.make_mpf_style(
-        marketcolors=mpf.make_marketcolors(
-            up=up_color,
-            down=down_color,
-            volume={"up": up_color, "down": down_color},
-            edge="inherit",
-        ),
-        gridstyle="--",
-        gridcolor="grey",
-        rc={"grid.alpha": 0.3},
-    )
+        style = mpf.make_mpf_style(
+            base_mpf_style="nightclouds",
+            marketcolors=mpf.make_marketcolors(
+                up=up_color,
+                down=down_color,
+                volume={"up": up_color, "down": down_color},
+                edge="inherit",
+                wick={"up": up_color, "down": down_color},
+            ),
+            gridstyle="--",
+            gridcolor=grid_color,
+            facecolor=bg_color,
+            edgecolor=bg_color,
+            figcolor=bg_color,
+            rc={
+                "grid.alpha": 0.3,
+                "text.color": text_color,
+                "axes.labelcolor": text_color,
+                "xtick.color": text_color,
+                "ytick.color": text_color,
+                "axes.edgecolor": grid_color,
+                "axes.facecolor": bg_color,
+                "figure.facecolor": bg_color,
+            },
+        )
+    else:
+        up_color = "#089981"
+        down_color = "#f33745"
+        style = mpf.make_mpf_style(
+            marketcolors=mpf.make_marketcolors(
+                up=up_color,
+                down=down_color,
+                volume={"up": up_color, "down": down_color},
+                edge="inherit",
+            ),
+            gridstyle="--",
+            gridcolor="grey",
+            rc={"grid.alpha": 0.3},
+        )
 
-    # Even smaller figure size
     kwargs = {
         "type": "candle",
         "volume": True,
         "style": style,
         "ylabel": "Price",
         "ylabel_lower": "Volume",
-        "figsize": (8, 5),  # Further reduced
+        "figsize": (8, 5),
         "panel_ratios": (3, 1),
         "returnfig": True,
         "tight_layout": False,
@@ -132,17 +191,20 @@ def plot_recent_candlesticks_minimal(df, last_n_periods=60, filename=None):
 
     if filename:
         buf = io.BytesIO()
-        # Lower DPI for smaller file
-        fig.savefig(buf, format="png", dpi=80, bbox_inches="tight")
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=80,
+            bbox_inches="tight",
+            facecolor=bg_color if dark_mode else "white",
+        )
         buf.seek(0)
 
         img = Image.open(buf)
         if img.mode == "RGBA":
             img = img.convert("RGB")
 
-        # Slightly lower quality but still very readable for charts
         img.save(filename, "JPEG", quality=80, optimize=True)
-
         buf.close()
         plt.close(fig)
 
