@@ -73,7 +73,7 @@
 
         /* Header */
         header {
-            margin-bottom: var(--space-8);
+            margin-bottom: var(--space-2);
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
@@ -114,6 +114,11 @@
             border-radius: 50%;
             background: var(--success);
             animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .status-dot.offline {
+            background: var(--muted);
+            animation: none;
         }
 
         @keyframes pulse {
@@ -458,33 +463,13 @@
 <body>
     <div class="container">
         <header>
-            <div>
-                <h1>Market Alerts</h1>
-                <p class="subtitle">Real-time trading signals</p>
-            </div>
             <div class="status-badge">
-                <span class="status-dot"></span>
-                <span id="connection-status">Live</span>
+                <span class="status-dot" id="status-dot"></span>
+                <span id="connection-status">Connecting...</span>
             </div>
         </header>
 
-        <!-- Overview Bar -->
-        <div class="overview-bar">
-            <div class="card">
-                <h2 class="card-title">Symbol</h2>
-                <div class="stat-value" id="symbol">QQQ</div>
-            </div>
-            <div class="card">
-                <h2 class="card-title">Last Update</h2>
-                <div class="stat-value" id="last-update" style="font-size: 1.125rem;">--:--:--</div>
-            </div>
-            <div class="card">
-                <h2 class="card-title">Active Alerts</h2>
-                <div class="stat-value" id="alert-count">0</div>
-            </div>
-        </div>
-
-        <!-- Recent Signal Banner - Sticky at top -->
+        <!-- Recent Signal Banner -->
         <div class="recent-signal-banner" id="recent-signal-banner">
             <div class="recent-signal-header">
                 <div class="recent-signal-title">Most Recent Signal</div>
@@ -516,12 +501,13 @@
     </div>
 
     <script>
-        // WebSocket connection
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+        // WebSocket Configuration
+        const WS_RECONNECT_DELAY = 3000; // Reconnect after 3 seconds
+        const HEARTBEAT_INTERVAL = 25000; // Send heartbeat every 25 seconds
         
         const elements = {
             status: document.getElementById('connection-status'),
+            statusDot: document.getElementById('status-dot'),
             chartImg: document.getElementById('chart-image'),
             chartLoading: document.getElementById('chart-loading'),
             alertsContainer: document.getElementById('alerts-container'),
@@ -542,29 +528,135 @@
 
         // Track most recent alert
         let mostRecentAlert = null;
+        
+        // WebSocket connection
+        let ws = null;
+        let reconnectTimeout = null;
+        let heartbeatInterval = null;
+        let isConnected = false;
 
-        // WebSocket handlers
-        ws.onopen = () => {
-            console.log('Connected');
-            elements.status.textContent = 'Live';
-            loadInitialData();
-        };
-
-        ws.onclose = () => {
-            console.log('Disconnected');
-            elements.status.textContent = 'Offline';
-        };
-
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
+        // WebSocket connection with auto-reconnect
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
             
-            if (data.type === 'chart_update') {
-                updateChart(data.image);
-            } else if (data.type === 'alert_update') {
-                handleAlertUpdate(data);
+            console.log('Connecting to WebSocket:', wsUrl);
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    console.log('✓ WebSocket connected');
+                    isConnected = true;
+                    elements.status.textContent = 'Live';
+                    elements.statusDot.classList.remove('offline');
+                    
+                    // Start heartbeat
+                    startHeartbeat();
+                    
+                    // Clear any reconnect timeout
+                    if (reconnectTimeout) {
+                        clearTimeout(reconnectTimeout);
+                        reconnectTimeout = null;
+                    }
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing message:', error);
+                    }
+                };
+                
+                ws.onclose = () => {
+                    console.log('✗ WebSocket disconnected');
+                    isConnected = false;
+                    elements.status.textContent = 'Reconnecting...';
+                    elements.statusDot.classList.add('offline');
+                    
+                    // Stop heartbeat
+                    stopHeartbeat();
+                    
+                    // Attempt to reconnect
+                    scheduleReconnect();
+                };
+                
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    isConnected = false;
+                    elements.status.textContent = 'Error';
+                    elements.statusDot.classList.add('offline');
+                };
+                
+            } catch (error) {
+                console.error('Failed to create WebSocket:', error);
+                scheduleReconnect();
             }
-        };
-
+        }
+        
+        function scheduleReconnect() {
+            if (reconnectTimeout) return; // Already scheduled
+            
+            console.log(`Reconnecting in ${WS_RECONNECT_DELAY/1000} seconds...`);
+            reconnectTimeout = setTimeout(() => {
+                reconnectTimeout = null;
+                connectWebSocket();
+            }, WS_RECONNECT_DELAY);
+        }
+        
+        function startHeartbeat() {
+            stopHeartbeat(); // Clear any existing interval
+            heartbeatInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, HEARTBEAT_INTERVAL);
+        }
+        
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
+        
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'chart_update':
+                    if (data.image) {
+                        updateChart(data.image);
+                    }
+                    break;
+                    
+                case 'alert_update':
+                    if (data.alert_type && data.data) {
+                        handleAlertUpdate(data);
+                    }
+                    break;
+                    
+                case 'connected':
+                    console.log('✓ Connection confirmed:', data.connection_id);
+                    break;
+                    
+                case 'ping':
+                    // Respond to server ping
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'pong' }));
+                    }
+                    break;
+                    
+                case 'pong':
+                    // Server responded to our ping
+                    console.log('Heartbeat received');
+                    break;
+                    
+                default:
+                    console.log('Unknown message type:', data.type);
+            }
+        }
+        
         function handleAlertUpdate(data) {
             // Update the specific alert type
             if (data.alert_type) {
@@ -654,9 +746,12 @@
         }
 
         function updateChart(imageData) {
-            elements.chartImg.src = imageData;
-            elements.chartImg.style.display = 'block';
-            elements.chartLoading.style.display = 'none';
+            // Only update if image has changed
+            if (elements.chartImg.src !== imageData) {
+                elements.chartImg.src = imageData;
+                elements.chartImg.style.display = 'block';
+                elements.chartLoading.style.display = 'none';
+            }
         }
 
         function renderAlerts() {
@@ -769,60 +864,59 @@
             });
         }
 
-        // Load initial data
-        async function loadInitialData() {
+        // Initialize
+        function initialize() {
+            console.log('Initializing dashboard...');
+            
+            // Connect to WebSocket
+            connectWebSocket();
+            
+            // Update timestamp every second
+            setInterval(updateTimestamp, 1000);
+            
+            // Load initial chart from REST API as fallback
+            loadInitialChart();
+        }
+        
+        // Load initial chart via REST API
+        async function loadInitialChart() {
             try {
-                // Load chart
-                const chartResponse = await fetch('/api/chart');
-                const chartData = await chartResponse.json();
-                if (chartData.image) {
-                    updateChart(chartData.image);
-                }
-
-                // Load alerts
-                const alertsResponse = await fetch('/api/alerts');
-                const alertsData = await alertsResponse.json();
-                if (alertsData && !alertsData.error) {
-                    activeAlerts = {
-                        reversion: alertsData.reversion_signal,
-                        trend: alertsData.trend_signal,
-                        range: alertsData.range_test_signal,
-                        volume: alertsData.volume_signal
-                    };
-                    
-                    // Find most recent alert from initial data
-                    const allAlerts = [];
-                    if (alertsData.reversion_signal) allAlerts.push({ type: 'reversion', data: alertsData.reversion_signal });
-                    if (alertsData.trend_signal) allAlerts.push({ type: 'trend', data: alertsData.trend_signal });
-                    if (alertsData.range_test_signal) allAlerts.push({ type: 'range', data: alertsData.range_test_signal });
-                    if (alertsData.volume_signal) allAlerts.push({ type: 'volume', data: alertsData.volume_signal });
-                    
-                    if (allAlerts.length > 0) {
-                        // Sort by timestamp to get most recent
-                        allAlerts.sort((a, b) => {
-                            const timeA = new Date(a.data.timestamp || 0);
-                            const timeB = new Date(b.data.timestamp || 0);
-                            return timeB - timeA;
-                        });
-                        
-                        mostRecentAlert = {
-                            type: allAlerts[0].type,
-                            data: allAlerts[0].data,
-                            timestamp: allAlerts[0].data.timestamp
-                        };
-                        updateRecentSignal();
-                    }
-                    
-                    renderAlerts();
-                    updateTimestamp();
+                const response = await fetch('/api/chart');
+                const data = await response.json();
+                if (data.image && !data.error) {
+                    updateChart(data.image);
                 }
             } catch (error) {
-                console.error('Error loading data:', error);
+                console.log('Could not load initial chart:', error);
             }
         }
 
-        // Update time every second
-        setInterval(updateTimestamp, 1000);
+        // Start when page loads
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initialize);
+        } else {
+            initialize();
+        }
+        
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                console.log('Page hidden - maintaining connection');
+            } else {
+                console.log('Page visible - checking connection');
+                if (!isConnected && ws && ws.readyState !== WebSocket.OPEN) {
+                    connectWebSocket();
+                }
+            }
+        });
+        
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            stopHeartbeat();
+            if (ws) {
+                ws.close();
+            }
+        });
     </script>
 </body>
 </html>
