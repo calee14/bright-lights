@@ -867,7 +867,10 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol, interval="3m", offset=40000)
+        alerts = check_alerts(symbol=symbol, interval="3m", offset=0)
+
+        # Update charts for the dashboard
+        send_to_dashboard("charts")
 
         if alerts:
             display_alerts(alerts)

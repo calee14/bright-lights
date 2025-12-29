@@ -11,6 +11,7 @@ import aiohttp
 import requests
 from pathlib import Path
 import base64
+import numpy as np
 
 
 class DashboardClient:
@@ -35,11 +36,21 @@ class DashboardClient:
         for key, value in data.items():
             if isinstance(value, datetime):
                 serialized[key] = value.isoformat()
+            elif isinstance(value, (np.bool_, np.bool)):  # Handle numpy booleans
+                serialized[key] = bool(value)
+            elif isinstance(value, (np.integer, np.floating)):  # Handle numpy numbers
+                serialized[key] = value.item()
             elif isinstance(value, dict):
                 serialized[key] = self._serialize_data(value)
             elif isinstance(value, list):
                 serialized[key] = [
-                    item.isoformat() if isinstance(item, datetime) else item
+                    item.isoformat()
+                    if isinstance(item, datetime)
+                    else bool(item)
+                    if isinstance(item, (np.bool_, np.bool))
+                    else item.item()
+                    if isinstance(item, (np.integer, np.floating))
+                    else item
                     for item in value
                 ]
             else:
@@ -169,7 +180,7 @@ class DashboardClient:
             print(f"✗ Cannot connect to dashboard at {self.dashboard_url}")
             print(f"  Make sure the server is running: python app_websocket.py")
         except Exception as e:
-            print(f"✗ Error sending alert: {e}")
+            print(f"✗ Error sending alert: {e}, {alert_data}")
 
     def send_chart_update_sync(self, image_path: str):
         """
@@ -296,5 +307,3 @@ def send_to_dashboard(alert_type: str, alert_data: Optional[Dict[Any, Any]] = No
 
     if alert_data:
         dashboard_cli.send_alert_sync(alert_type, alert_data)
-    else:
-        print(f"✗ No alert data provided for {alert_type}")
