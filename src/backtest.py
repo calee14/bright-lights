@@ -24,7 +24,7 @@ console = Console()
 
 main_ticker = "QQQ"
 forward_period = 3
-min_signals = 13
+min_signals = 30
 train_splits = 2
 
 
@@ -1092,6 +1092,8 @@ def average_parameters(results):
     if not results:
         console.print("[yellow]Warning: No results to average[/yellow]")
         return {}
+
+    results = list(filter(lambda x: x != {}, results))
 
     # Keys that are metrics (not parameters to average)
     metric_keys = {
