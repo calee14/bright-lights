@@ -13,6 +13,7 @@ from src.util.bot import (
 )
 from src.util.feed import get_yahoo_finance_data, parse_yahoo_data
 from src.util.plot import plot_recent_candlesticks
+from src.trader import Trader
 
 from concurrent.futures import Future, ThreadPoolExecutor, thread
 from rich.markdown import Markdown
@@ -23,11 +24,16 @@ from src.util.dashboard_client import send_to_dashboard
 import asyncio
 
 
+OFFSET = 28500
+
 console = Console()
 main_ticker = "QQQ"  # "MNQ=F"
 
 active_reversion_alert = None
 reversion_alert_timer = None
+
+# Global trader instance
+trader_instance: Optional[Trader] = None
 
 
 def reversion_alert(data, std=2.0, lookback=8):
@@ -252,7 +258,7 @@ def trend_alert(
             "red_score": red_score * 100,
             "ratio": red_ratio,
             "threshold": threshold,
-            "strength": "STRONG" if red_ratio >= 0.88 else "MODERATE",
+            "strength": "STRONG" if red_ratio >= 0.9 else "MODERATE",
             "momentum": trend_momentum,
             "roc": recent_roc * 100,  # As percentage
             "n_candles": n_candles,
@@ -619,7 +625,7 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
     Dislay alerts in terminal
     and on Discord
     """
-    global active_reversion_alert, reversion_alert_timer
+    global active_reversion_alert, reversion_alert_timer, trader_instance
 
     if alerts is None:
         return
@@ -628,6 +634,13 @@ def display_alerts(alerts: Optional[Dict[Any, Any]]):
     trend_signal = alerts.get("trend_signal")
     range_test_signal = alerts.get("range_test_signal")
     volume_signal = alerts.get("volume_signal")
+
+    # Send signals to trader if available
+    if trader_instance:
+        if trend_signal:
+            trader_instance.receive_signal(alerts)
+        if range_test_signal and range_test_signal["level_type"] != "MIXED":
+            trader_instance.receive_signal(alerts)
 
     if reversion_signal:
         if (
@@ -867,7 +880,7 @@ def alert_monitor_loop(symbol="QQQ", interval_seconds=1, stop_event=None):
             console.print("[yellow]Alert monitor stopped.[/yellow]")
             break
 
-        alerts = check_alerts(symbol=symbol, interval="3m", offset=0)
+        alerts = check_alerts(symbol=symbol, interval="3m", offset=OFFSET)
 
         # Update charts for the dashboard
         send_to_dashboard("charts")
@@ -903,12 +916,26 @@ def start_alert_monitor_thread(symbol="QQQ", interval_seconds=60):
 
 
 async def main():
+    global trader_instance
+
     console.print("Bells coming online...")
 
     bot_task = asyncio.create_task(start_bot())
     messenger_task = asyncio.create_task(messenger())
     while not is_bot_ready():
         await asyncio.sleep(0.2)
+
+    # Initialize and start trader
+    trader_instance = Trader(
+        symbol=main_ticker,
+        stop_loss_amount=0.50,  # $2.50 stop loss
+        price_range_threshold_amount=0.20,  # $0.50 breakout threshold
+        max_position_time_minutes=50,
+        poll_interval_seconds=1.0,
+        time_offset=OFFSET,
+    )
+    trader_instance.start()
+    console.print("[green]Trader initialized and started.[/green]")
 
     # Start main alert monitor (mean reversion, trend, range tests) - runs every 91 seconds
     monitor_thread, stop_event = start_alert_monitor_thread(
@@ -927,6 +954,13 @@ async def main():
         console.print("\n[yellow]⚠️  Shutting down gracefully...[/yellow]")
     finally:
         console.print("\n[yellow]Shutting down...[/yellow]")
+
+        # Stop trader and show session summary
+        if trader_instance:
+            trader_instance.stop()
+            console.print("[dim]✓ Trader stopped[/dim]")
+            console.print(trader_instance.get_session_summary())
+
         bot_task.cancel()
         try:
             await bot_task

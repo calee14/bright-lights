@@ -158,9 +158,7 @@ def backtest_single_trend_combination(args):
         )
 
         if signal:
-            forward_returns = calculate_forward_returns(
-                data, i + n_candles, periods=forward_period
-            )
+            forward_returns = calculate_forward_returns(data, i + n_candles, periods=3)
 
             if forward_returns is not None:
                 if signal["direction"] == "UPTREND":
@@ -304,7 +302,7 @@ def backtest_trend_alert(
 
                                     if signal:
                                         forward_returns = calculate_forward_returns(
-                                            data, i + n_candles, periods=forward_period
+                                            data, i + n_candles, periods=3
                                         )
 
                                         if forward_returns is not None:
